@@ -35,6 +35,7 @@ class Tariff(Base):
     title: Mapped[str] = mapped_column(String(128))
     duration_days: Mapped[int]
     price_minor: Mapped[int]
+    stars_price: Mapped[int] = mapped_column(default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
@@ -49,6 +50,9 @@ class Order(Base):
     tariff_title: Mapped[str] = mapped_column(String(128))
     duration_days: Mapped[int]
     status: Mapped[str] = mapped_column(String(32), index=True)
+    payment_method: Mapped[str] = mapped_column(String(16), default="qr")
+    stars_amount: Mapped[int | None] = mapped_column(nullable=True)
+    telegram_payment_charge_id: Mapped[str | None] = mapped_column(String(128), nullable=True, unique=True, index=True)
     access_link: Mapped[str | None] = mapped_column(Text, nullable=True)
     panel_username: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

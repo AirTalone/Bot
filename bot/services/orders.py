@@ -15,12 +15,13 @@ class TariffSeed:
     title: str
     duration_days: int
     price_minor: int
+    stars_price: int
 
 
 TARIFF_SEED: tuple[TariffSeed, ...] = (
-    TariffSeed("month_1", "1 месяц", 30, 19_900),
-    TariffSeed("month_3", "3 месяца", 90, 49_900),
-    TariffSeed("month_6", "6 месяцев", 180, 89_900),
+    TariffSeed("month_1", "1 месяц", 30, 19_900, 75),
+    TariffSeed("month_3", "3 месяца", 90, 49_900, 180),
+    TariffSeed("month_6", "6 месяцев", 180, 89_900, 300),
 )
 
 
@@ -29,19 +30,23 @@ def utcnow() -> datetime:
 
 
 async def seed_tariffs(session: AsyncSession) -> None:
-    existing = set(await session.scalars(select(Tariff.slug)))
+    by_slug = {tariff.slug: tariff for tariff in await session.scalars(select(Tariff))}
     for item in TARIFF_SEED:
-        if item.slug in existing:
-            continue
-        session.add(
-            Tariff(
-                slug=item.slug,
-                title=item.title,
-                duration_days=item.duration_days,
-                price_minor=item.price_minor,
-                is_active=True,
+        existing = by_slug.get(item.slug)
+        if existing is None:
+            session.add(
+                Tariff(
+                    slug=item.slug,
+                    title=item.title,
+                    duration_days=item.duration_days,
+                    price_minor=item.price_minor,
+                    stars_price=item.stars_price,
+                    is_active=True,
+                )
             )
-        )
+            continue
+        if existing.stars_price == 0 and item.stars_price > 0:
+            existing.stars_price = item.stars_price
     await session.flush()
 
 
@@ -91,7 +96,14 @@ async def _allocate_payment_code(session: AsyncSession) -> str:
     raise RuntimeError("failed to allocate a payment code")
 
 
-async def create_order(session: AsyncSession, user: User, tariff: Tariff) -> Order:
+async def create_order(
+    session: AsyncSession,
+    user: User,
+    tariff: Tariff,
+    *,
+    payment_method: str = "qr",
+    stars_amount: int | None = None,
+) -> Order:
     now = utcnow()
     await session.execute(
         update(Order)
@@ -107,6 +119,8 @@ async def create_order(session: AsyncSession, user: User, tariff: Tariff) -> Ord
         tariff_title=tariff.title,
         duration_days=tariff.duration_days,
         status=OrderStatus.awaiting_payment.value,
+        payment_method=payment_method,
+        stars_amount=stars_amount,
         created_at=now,
     )
     session.add(order)
@@ -150,16 +164,63 @@ async def _transition(
     return await get_order(session, order_id)
 
 
-async def mark_paid(session: AsyncSession, order_id: int, user_id: int) -> Order | None:
+async def mark_paid(
+    session: AsyncSession,
+    order_id: int,
+    user_id: int,
+    *,
+    payment_method: str | None = None,
+    stars_amount: int | None = None,
+    telegram_payment_charge_id: str | None = None,
+) -> Order | None:
     """Move the buyer's own checkout from awaiting payment to admin review."""
+    extra: dict[str, object] = {"claimed_at": utcnow()}
+    if payment_method is not None:
+        extra["payment_method"] = payment_method
+    if stars_amount is not None:
+        extra["stars_amount"] = stars_amount
+    if telegram_payment_charge_id is not None:
+        extra["telegram_payment_charge_id"] = telegram_payment_charge_id
     return await _transition(
         session,
         order_id,
         from_status=OrderStatus.awaiting_payment,
         to_status=OrderStatus.pending_review,
         user_id=user_id,
-        extra_values={"claimed_at": utcnow()},
+        extra_values=extra,
     )
+
+
+async def get_order_by_charge_id(session: AsyncSession, charge_id: str) -> Order | None:
+    return await session.scalar(
+        select(Order)
+        .where(Order.telegram_payment_charge_id == charge_id)
+        .options(selectinload(Order.user), selectinload(Order.tariff))
+    )
+
+
+async def set_order_payment_method(
+    session: AsyncSession,
+    order_id: int,
+    user_id: int,
+    *,
+    payment_method: str,
+    stars_amount: int | None = None,
+) -> Order | None:
+    result = await session.execute(
+        update(Order)
+        .where(
+            Order.id == order_id,
+            Order.user_id == user_id,
+            Order.status == OrderStatus.awaiting_payment.value,
+        )
+        .values(payment_method=payment_method, stars_amount=stars_amount)
+        .returning(Order.id)
+        .execution_options(synchronize_session=False)
+    )
+    if result.scalar_one_or_none() is None:
+        return None
+    return await get_order(session, order_id)
 
 
 async def cancel_awaiting(session: AsyncSession, order_id: int, user_id: int) -> Order | None:

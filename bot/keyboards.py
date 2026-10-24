@@ -8,6 +8,7 @@ from bot.callbacks import (
     CheckoutAction,
     MenuAction,
     OrderAction,
+    PayMethodAction,
     TariffSelect,
 )
 from bot.models import Order, OrderStatus, Tariff
@@ -101,6 +102,31 @@ def reminder_keyboard() -> InlineKeyboardMarkup:
 
 def expired_keyboard() -> InlineKeyboardMarkup:
     return reminder_keyboard()
+
+
+def pay_method_keyboard(order_id: int, *, stars_amount: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"Telegram Stars · {stars_amount} ⭐",
+                    callback_data=PayMethodAction(order_id=order_id, method="stars").pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Оплата переводом (QR)",
+                    callback_data=PayMethodAction(order_id=order_id, method="qr").pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Отменить",
+                    callback_data=CheckoutAction(order_id=order_id, action="cancel").pack(),
+                )
+            ],
+        ]
+    )
 
 
 def checkout_keyboard(order_id: int) -> InlineKeyboardMarkup:

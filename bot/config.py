@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     broadcast_delay_seconds: float = 0.05
     export_days: int = 30
 
+    stars_enabled: bool = False
+
     @field_validator(
         "admin_ids",
         "payment_title",

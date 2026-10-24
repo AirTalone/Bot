@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from bot.config import Settings, get_settings
 from bot.db import create_engine, create_session_factory, ensure_sqlite_parent, prepare_runtime_db
-from bot.handlers import admin_router, user_router
+from bot.handlers import admin_router, payments_router, user_router
 from bot.middlewares import DbSessionMiddleware
 from bot.services.reminders import process_reminders
 
@@ -82,6 +82,7 @@ async def main() -> None:
     dispatcher = Dispatcher(storage=MemoryStorage(), settings=settings)
     dispatcher.update.middleware(DbSessionMiddleware(session_factory))
     dispatcher.include_router(admin_router)
+    dispatcher.include_router(payments_router)
     dispatcher.include_router(user_router)
 
     @dispatcher.errors()

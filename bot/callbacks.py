@@ -10,6 +10,11 @@ class CheckoutAction(CallbackData, prefix="checkout"):
     action: str
 
 
+class PayMethodAction(CallbackData, prefix="pay"):
+    order_id: int
+    method: str
+
+
 class MenuAction(CallbackData, prefix="menu"):
     action: str
 

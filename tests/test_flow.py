@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from bot.callbacks import CheckoutAction, TariffSelect
 from bot.config import Settings
-from bot.handlers import admin_router, user_router
+from bot.handlers import admin_router, payments_router, user_router
 from bot.middlewares import DbSessionMiddleware
 from bot.models import OrderStatus
 from bot.services.orders import get_order, list_active_tariffs, list_user_orders
@@ -119,6 +119,7 @@ async def test_qr_payment_flow(session_factory: async_sessionmaker[AsyncSession]
     dispatcher = Dispatcher(storage=MemoryStorage(), settings=settings)
     dispatcher.update.middleware(DbSessionMiddleware(session_factory))
     dispatcher.include_router(admin_router)
+    dispatcher.include_router(payments_router)
     dispatcher.include_router(user_router)
 
     fake = FakeSession()

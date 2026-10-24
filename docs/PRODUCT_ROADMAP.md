@@ -17,7 +17,8 @@
 5. ручная вставка ссылки доступа + автовыдача Marzban (`PANEL_ENABLED`);
 6. UX: /help, FAQ, напоминания об истечении, антиспам;
 7. Админка: stats, поиск, CSV, рассылка, техработы, audit;
-8. pytest на статусы и e2e-флоу без Telegram.
+8. Telegram Stars + QR fallback;
+9. pytest на статусы и e2e-флоу без Telegram.
 
 Дальше не «переписывать с нуля чужой магазин», а **дожать свой бот** и подключить панель выдачи.
 
@@ -182,13 +183,13 @@
 
 ### Фаза 7 — Платежи v2 (когда ручной QR надоест)
 
-64. Выбрать шлюз (YooKassa / Platega / Stars).
-65. Добавить webhook endpoint (HTTPS обязателен) рядом с ботом или вместо polling — webhook Telegram + payments.
-66. Сверка суммы/currency/order_id; идемпотентность webhook.
-67. Авто-`fulfill` только после verified payment event.
-68. Сохранить ручной QR как fallback («оплата переводом»).
-69. Чеки/54-ФЗ — по схеме юриста и кассы.
-70. Тесты на replay webhook и wrong signature.
+64. ~~Шлюз v1: **Telegram Stars** (XTR); YooKassa/Platega — позже~~  
+65. ~~События через polling: `pre_checkout_query` + `successful_payment` (отдельный HTTPS webhook не нужен для Stars)~~  
+66. ~~Сверка currency/amount/order payload; идемпотентность по `telegram_payment_charge_id`~~  
+67. ~~Авто-`fulfill` после Stars (если `PANEL_ENABLED`); иначе очередь админу~~  
+68. ~~QR/перевод остаётся fallback (`STARS_ENABLED=true` → выбор способа)~~  
+69. Чеки/54-ФЗ — по схеме юриста (для Stars отдельная модель TG).  
+70. ~~Тесты: replay charge_id, wrong amount~~
 
 ### Фаза 8 — Надёжность «без сбоев»
 
