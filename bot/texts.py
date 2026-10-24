@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 from html import escape
 
 from bot.models import Order, OrderStatus, Tariff, User
+from bot.services.admin_ops import AdminStats
 from bot.services.payments import format_money
 
 STATUS_LABELS: dict[str, str] = {
@@ -237,16 +238,86 @@ def orders_text(orders: list[Order]) -> str:
     return "\n".join(lines)
 
 
-def admin_home_text(pending_count: int) -> str:
+def admin_home_text(stats: AdminStats) -> str:
+    mode = "техработы ВКЛ" if stats.maintenance else "обычный режим"
     return "\n".join(
         [
             "<b>Админка</b>",
+            f"Режим: {mode}",
             "",
-            f"Заявок на проверке: {pending_count}",
+            f"Новые (ждут оплату): {stats.awaiting_payment}",
+            f"На проверке: {stats.pending_review}",
+            f"Выдано сегодня: {stats.fulfilled_today}",
+            f"Активные подписки: {stats.active_subs}",
+            f"Ошибки панели сегодня: {stats.panel_errors_today}",
+            f"Пользователей: {stats.users_total}",
             "",
-            "Откройте заявку, подтвердите оплату и отправьте ссылку доступа.",
+            "Очередь → подтверждение → ссылка. Поиск / рассылка / CSV — кнопки ниже.",
         ]
     )
+
+
+def maintenance_user_text(*, support_contact: str) -> str:
+    lines = [
+        "<b>Технические работы</b>",
+        "",
+        "Покупки временно выключены. Попробуйте позже.",
+    ]
+    if support_contact:
+        lines.extend(["", f"Поддержка: {e(support_contact)}"])
+    return "\n".join(lines)
+
+
+def ask_search_text() -> str:
+    return "\n".join(
+        [
+            "Поиск: пришлите <code>telegram id</code>, код платежа или @username.",
+            "/cancel — отмена.",
+        ]
+    )
+
+
+def search_results_text(orders: list[Order]) -> str:
+    if not orders:
+        return "Ничего не найдено."
+    lines = ["<b>Результаты поиска</b>", ""]
+    for order in orders:
+        lines.append(
+            f"<code>{e(order.payment_code)}</code> · {e(status_label(order.status))} · "
+            f"{e(user_label(order.user))} · id <code>{order.user.telegram_id}</code>"
+        )
+        if order.panel_username:
+            lines.append(f"панель: <code>{e(order.panel_username)}</code>")
+    return "\n".join(lines)
+
+
+def ask_broadcast_text() -> str:
+    return "\n".join(
+        [
+            "Рассылка: пришлите текст сообщения (HTML как в боте).",
+            "/cancel — отмена.",
+        ]
+    )
+
+
+def confirm_broadcast_text(preview: str, recipients: int) -> str:
+    short = preview if len(preview) <= 500 else preview[:499] + "…"
+    return "\n".join(
+        [
+            f"Разослать {recipients} пользователям?",
+            "",
+            short,
+        ]
+    )
+
+
+def broadcast_done_text(*, sent: int, failed: int) -> str:
+    return f"Рассылка завершена. Доставлено: {sent}, ошибок: {failed}."
+
+
+def ban_done_text(order: Order) -> str:
+    username = order.panel_username or "—"
+    return f"Пользователь панели <code>{e(username)}</code> отключён (заказ <code>{e(order.payment_code)}</code>)."
 
 
 def pending_list_text(orders: list[Order], total: int) -> str:

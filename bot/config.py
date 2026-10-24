@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     paid_cooldown_seconds: int = 20
     reminder_days_before: int = 3
     reminder_interval_seconds: int = 3600
+    broadcast_delay_seconds: float = 0.05
+    export_days: int = 30
 
     @field_validator(
         "admin_ids",

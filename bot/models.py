@@ -60,3 +60,23 @@ class Order(Base):
 
     user: Mapped[User] = relationship(lazy="raise")
     tariff: Mapped[Tariff] = relationship(lazy="raise")
+
+
+class RuntimeState(Base):
+    """Singleton-ish row (id=1) for operator toggles."""
+
+    __tablename__ = "runtime_state"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    maintenance: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class AdminAuditLog(Base):
+    __tablename__ = "admin_audit_logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    admin_telegram_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    action: Mapped[str] = mapped_column(String(64), index=True)
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    order_id: Mapped[int | None] = mapped_column(nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)

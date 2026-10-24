@@ -106,6 +106,41 @@ async def test_marzban_retries_on_500() -> None:
 
 
 @pytest.mark.asyncio
+async def test_marzban_disable_user() -> None:
+    calls: list[tuple[str, str]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.url.path))
+        if request.url.path == "/api/admin/token":
+            return httpx.Response(200, json={"access_token": "tok"})
+        if request.method == "GET" and request.url.path == "/api/user/tg5":
+            return httpx.Response(
+                200,
+                json={
+                    "username": "tg5",
+                    "subscription_url": "https://panel.test/sub/5",
+                    "expire": int((datetime.now(UTC) + timedelta(days=2)).timestamp()),
+                    "status": "active",
+                },
+            )
+        if request.method == "PUT" and request.url.path == "/api/user/tg5":
+            body = json.loads(request.content.decode())
+            assert body["status"] == "disabled"
+            return httpx.Response(200, json={"username": "tg5", "status": "disabled"})
+        return httpx.Response(500, text="unexpected")
+
+    client = MarzbanClient(
+        base_url="https://panel.test",
+        username="admin",
+        password="secret",
+        transport=httpx.MockTransport(handler),
+    )
+    await client.disable_user(username="tg5")
+    await client.aclose()
+    assert ("PUT", "/api/user/tg5") in calls
+
+
+@pytest.mark.asyncio
 async def test_marzban_fetch_subscription() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/api/admin/token":
