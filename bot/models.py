@@ -50,6 +50,8 @@ class Order(Base):
     duration_days: Mapped[int]
     status: Mapped[str] = mapped_column(String(32), index=True)
     access_link: Mapped[str | None] = mapped_column(Text, nullable=True)
+    panel_username: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

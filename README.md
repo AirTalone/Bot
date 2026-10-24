@@ -89,6 +89,9 @@ bot/
 
 - Как пользоваться скиллами: [`docs/SKILLS_HOWTO.md`](docs/SKILLS_HOWTO.md)
 - Полный план до боевого запуска: [`docs/PRODUCT_ROADMAP.md`](docs/PRODUCT_ROADMAP.md)
+- Установка Marzban и выдача из панели: [`docs/MARZBAN.md`](docs/MARZBAN.md)
 - Models для DAG: [`.cursor/models-vpn.json`](.cursor/models-vpn.json)
 - Установленные skills: [`.agents/skills/`](.agents/skills/) (lock: `skills-lock.json`)
+
+Когда `PANEL_ENABLED=true`, админская кнопка «Подтвердить» создаёт/продлевает пользователя в Marzban и присылает subscription URL. Иначе — ручная вставка ссылки, как раньше.
 

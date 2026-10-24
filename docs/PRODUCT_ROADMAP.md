@@ -130,39 +130,31 @@
 
 ### Фаза 2 — Железо VPN (панель)
 
-21. Установить выбранную панель по официальной доке.
-22. Создать sudo-admin панели; сразу сменить дефолтные пароли.
-23. Закрыть admin UI: firewall / reverse proxy / VPN-only / Cloudflare Access (если CF).
-24. Настроить Xray inbound: VLESS + REALITY (или ваш выбор), валидный dest/SNI.
-25. Проверить руками: создать тестового юзера → импорт в клиент (Hiddify/Happ/v2rayNG) → трафик идёт.
-26. Включить subscription page панели; проверить URL формата, который пойдёт в бот.
-27. Выпустить API-токен панели (не логин/пароль в боте, если можно токеном).
-28. Снять baseline: CPU/RAM/диск при 0 и при 10 тестовых юзерах.
-29. Настроить бэкап БД панели (cron + offsite).
-30. Документировать в `docs/RUNBOOK.md`: как поднять ноду с нуля.
+21–30. Инструкция для вашего VPS: **`docs/MARZBAN.md`** (установка, REALITY, API, бэкап, security).  
+Выполняется на сервере вручную — в репозитории код панели не ставится.
 
 ### Фаза 3 — Клиент панели в боте
 
-31. Добавить пакет `bot/services/panel/` с интерфейсом `PanelClient`.
-32. Реализовать адаптер Marzban **или** Remnawave (один сначала).
-33. Методы: `create_user`, `extend_user`, `disable_user`, `get_subscription_url`, `get_usage`.
-34. Идемпотентный ключ: `telegram_id + order_id` → один panel username.
-35. Retries с backoff на 5xx/timeout; circuit breaker при дауне панели.
-36. Юнит-тесты адаптера на httpx mock.
-37. Staging: бот → панель create → реальная sub-ссылка в тестовом чате.
-38. Метрика/лог: `panel_create_ok|fail` с order_id.
+31. ~~`bot/services/panel/` + `PanelClient`~~  
+32. ~~Адаптер Marzban (`MarzbanClient`)~~  
+33. create/extend через `ensure_subscription`; disable/usage — позже  
+34. ~~username `tg<telegram_id>`~~  
+35. Retries/circuit breaker — следующий шаг  
+36. ~~Тесты httpx MockTransport~~  
+37. Staging smoke — после установки панели по `docs/MARZBAN.md`  
+38. Логи предупреждений при `PanelError`
 
 ### Фаза 4 — Автовыдача вместо ручной ссылки
 
-39. В админке кнопка «Подтвердить» создаёт пользователя в панели и шлёт URL покупателю.
-40. Опция `AUTO_PROVISION=true`: после «Я оплатил» **не** сразу выдавать; сначала админ ИЛИ (позже) платёжный webhook.
-41. Для v1.1: админ «Подтвердить» = verify payment + provision (без ручного paste link).
-42. Fallback: если панель упала — статус `fulfillment_failed`, алерт админам, кнопка retry.
-43. Хранить `panel_username`, `subscription_url`, `expires_at` в `orders` / новой таблице `subscriptions`.
-44. Экран «Мои заказы» показывает срок и кнопку «Обновить ссылку».
-45. Продление: новый заказ на того же panel user (`extend`).
-46. Тесты: fulfill → panel called once; повтор fulfill не создаёт дубль.
-47. Ручной smoke: купить → оплатить → подтвердить → импорт → интернет.
+39. ~~Админ «Подтвердить» → provision + send URL (если `PANEL_ENABLED=true`)~~  
+40. Выдача по-прежнему только после админ-подтверждения (не после «Я оплатил»)  
+41. ~~Готово для Marzban~~  
+42. При ошибке панели заявка остаётся `pending_review` + кнопка «Вставить ссылку вручную»  
+43. ~~`panel_username`, `expires_at`, `access_link`=subscription_url~~  
+44. Показ срока в сообщении о выдаче; кнопка «Обновить ссылку» — позже  
+45. ~~Повторная покупка продлевает expire~~  
+46. ~~Тесты provision_and_fulfill~~  
+47. Ручной smoke на вашей панели
 
 ### Фаза 5 — UX продукта
 

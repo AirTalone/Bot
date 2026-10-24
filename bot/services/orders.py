@@ -173,14 +173,29 @@ async def cancel_awaiting(session: AsyncSession, order_id: int, user_id: int) ->
     )
 
 
-async def fulfill_order(session: AsyncSession, order_id: int, access_link: str) -> Order | None:
+async def fulfill_order(
+    session: AsyncSession,
+    order_id: int,
+    access_link: str,
+    *,
+    panel_username: str | None = None,
+    expires_at: datetime | None = None,
+) -> Order | None:
     """Confirm a reviewed payment and store the access link."""
+    extra: dict[str, object] = {
+        "access_link": access_link,
+        "resolved_at": utcnow(),
+    }
+    if panel_username is not None:
+        extra["panel_username"] = panel_username
+    if expires_at is not None:
+        extra["expires_at"] = expires_at
     return await _transition(
         session,
         order_id,
         from_status=OrderStatus.pending_review,
         to_status=OrderStatus.fulfilled,
-        extra_values={"access_link": access_link, "resolved_at": utcnow()},
+        extra_values=extra,
     )
 
 

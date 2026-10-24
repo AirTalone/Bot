@@ -185,8 +185,8 @@ async def claim_payment(
     delivered = await notify_admins(
         callback.bot,
         settings,
-        admin_order_text(order),
-        reply_markup=order_keyboard(order.id),
+        admin_order_text(order, panel_enabled=settings.panel_enabled),
+        reply_markup=order_keyboard(order.id, panel_enabled=settings.panel_enabled),
     )
     if delivered == 0:
         logger.warning("order %s claimed but no admin was notified", order.payment_code)
