@@ -3,15 +3,23 @@ import logging
 from aiogram import F, Router
 from aiogram.enums import ChatType
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import Command, CommandStart
+from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import BufferedInputFile, CallbackQuery, Message, User as TelegramUser
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.callbacks import CheckoutAction, MenuAction, TariffSelect
+from bot.callbacks import CheckoutAction, MenuAction, OrderAction, TariffSelect
 from bot.config import Settings
-from bot.keyboards import checkout_keyboard, order_keyboard, orders_keyboard, tariffs_keyboard
+from bot.keyboards import (
+    checkout_keyboard,
+    faq_keyboard,
+    help_keyboard,
+    order_keyboard,
+    orders_keyboard,
+    tariffs_keyboard,
+)
 from bot.models import User
 from bot.notifications import notify_admins
+from bot.services.cooldowns import CLAIM_PAID, ORDER_CREATE, gate
 from bot.services.orders import (
     cancel_awaiting,
     create_order,
@@ -21,13 +29,19 @@ from bot.services.orders import (
     mark_paid,
     upsert_user,
 )
+from bot.services.panel import PanelError, build_panel_client
 from bot.services.payments import build_qr_payload, format_money, render_qr_png
+from bot.services.reminders import refresh_subscription_link
 from bot.texts import (
     admin_order_text,
     cancelled_text,
     claimed_text,
+    cooldown_text,
+    faq_text,
+    help_text,
     orders_text,
     payment_caption,
+    refreshed_link_text,
     tariffs_text,
 )
 from bot.utils import telegram_full_name
@@ -66,19 +80,44 @@ async def show_orders(
     message: Message,
     tg_user: TelegramUser,
     session: AsyncSession,
+    settings: Settings,
     *,
     edit: bool,
 ) -> None:
     user = await bind_user(tg_user, session)
     orders = await list_user_orders(session, user.id)
     text = orders_text(orders)
-    markup = orders_keyboard()
+    markup = orders_keyboard(orders, panel_enabled=settings.panel_enabled)
     if edit:
         try:
             await message.edit_text(text, reply_markup=markup)
             return
         except TelegramBadRequest:
             logger.debug("failed to edit orders message", exc_info=True)
+    await message.answer(text, reply_markup=markup)
+
+
+async def show_help(message: Message, settings: Settings, *, edit: bool) -> None:
+    text = help_text(support_contact=settings.support_contact)
+    markup = help_keyboard()
+    if edit:
+        try:
+            await message.edit_text(text, reply_markup=markup)
+            return
+        except TelegramBadRequest:
+            logger.debug("failed to edit help message", exc_info=True)
+    await message.answer(text, reply_markup=markup)
+
+
+async def show_faq(message: Message, settings: Settings, *, edit: bool) -> None:
+    text = faq_text(support_contact=settings.support_contact)
+    markup = faq_keyboard()
+    if edit:
+        try:
+            await message.edit_text(text, reply_markup=markup)
+            return
+        except TelegramBadRequest:
+            logger.debug("failed to edit faq message", exc_info=True)
     await message.answer(text, reply_markup=markup)
 
 
@@ -92,18 +131,38 @@ async def clear_markup(message: Message | None) -> None:
 
 
 @router.message(CommandStart())
-async def start(message: Message, session: AsyncSession, settings: Settings) -> None:
+async def start(
+    message: Message,
+    session: AsyncSession,
+    settings: Settings,
+    command: CommandObject,
+) -> None:
     if message.from_user is None:
         return
     await bind_user(message.from_user, session)
+    arg = (command.args or "").strip().lower()
+    if arg in {"renew", "help"}:
+        if arg == "help":
+            await show_help(message, settings, edit=False)
+            return
     await show_tariffs(message, session, settings, edit=False)
 
 
 @router.message(Command("orders"))
-async def orders_command(message: Message, session: AsyncSession) -> None:
+async def orders_command(message: Message, session: AsyncSession, settings: Settings) -> None:
     if message.from_user is None:
         return
-    await show_orders(message, message.from_user, session, edit=False)
+    await show_orders(message, message.from_user, session, settings, edit=False)
+
+
+@router.message(Command("help"))
+async def help_command(message: Message, settings: Settings) -> None:
+    await show_help(message, settings, edit=False)
+
+
+@router.message(Command("faq"))
+async def faq_command(message: Message, settings: Settings) -> None:
+    await show_faq(message, settings, edit=False)
 
 
 @router.message(Command("admin"))
@@ -112,6 +171,7 @@ async def admin_denied(message: Message) -> None:
 
 
 @router.callback_query(MenuAction.filter(F.action == "tariffs"))
+@router.callback_query(MenuAction.filter(F.action == "renew"))
 async def tariffs_menu(
     callback: CallbackQuery,
     session: AsyncSession,
@@ -125,12 +185,70 @@ async def tariffs_menu(
 
 
 @router.callback_query(MenuAction.filter(F.action == "orders"))
-async def orders_menu(callback: CallbackQuery, session: AsyncSession) -> None:
+async def orders_menu(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
     if callback.from_user is None or not isinstance(callback.message, Message):
         await callback.answer()
         return
     await callback.answer()
-    await show_orders(callback.message, callback.from_user, session, edit=True)
+    await show_orders(callback.message, callback.from_user, session, settings, edit=True)
+
+
+@router.callback_query(MenuAction.filter(F.action == "help"))
+async def help_menu(callback: CallbackQuery, settings: Settings) -> None:
+    if not isinstance(callback.message, Message):
+        await callback.answer()
+        return
+    await callback.answer()
+    await show_help(callback.message, settings, edit=True)
+
+
+@router.callback_query(MenuAction.filter(F.action == "faq"))
+async def faq_menu(callback: CallbackQuery, settings: Settings) -> None:
+    if not isinstance(callback.message, Message):
+        await callback.answer()
+        return
+    await callback.answer()
+    await show_faq(callback.message, settings, edit=True)
+
+
+@router.callback_query(OrderAction.filter(F.action == "refresh"))
+async def refresh_link(
+    callback: CallbackQuery,
+    callback_data: OrderAction,
+    session: AsyncSession,
+    settings: Settings,
+) -> None:
+    if callback.from_user is None:
+        await callback.answer()
+        return
+    if not settings.panel_enabled:
+        await callback.answer("Обновление ссылки недоступно", show_alert=True)
+        return
+    user = await bind_user(callback.from_user, session)
+    panel = None
+    try:
+        panel = build_panel_client(settings)
+        if panel is None:
+            raise PanelError("panel client is not configured")
+        order = await refresh_subscription_link(
+            session,
+            order_id=callback_data.order_id,
+            user_id=user.id,
+            panel=panel,
+        )
+    except PanelError as exc:
+        logger.warning("refresh link failed for order %s: %s", callback_data.order_id, exc)
+        await callback.answer("Не удалось обновить ссылку", show_alert=True)
+        return
+    finally:
+        if panel is not None:
+            await panel.aclose()
+    if order is None:
+        await callback.answer("Заказ не найден", show_alert=True)
+        return
+    await callback.answer("Ссылка обновлена")
+    if isinstance(callback.message, Message):
+        await callback.message.answer(refreshed_link_text(order))
 
 
 @router.callback_query(TariffSelect.filter())
@@ -143,12 +261,17 @@ async def choose_tariff(
     if callback.from_user is None or not isinstance(callback.message, Message):
         await callback.answer()
         return
+    hit = gate.check(ORDER_CREATE, callback.from_user.id, settings.order_cooldown_seconds)
+    if hit is not None:
+        await callback.answer(cooldown_text(hit.retry_after_seconds), show_alert=True)
+        return
     tariff = await get_tariff(session, callback_data.tariff_id)
     if tariff is None:
         await callback.answer("Тариф недоступен", show_alert=True)
         return
     user = await bind_user(callback.from_user, session)
     order = await create_order(session, user, tariff)
+    gate.hit(ORDER_CREATE, callback.from_user.id)
     payload = build_qr_payload(
         payment_title=settings.payment_title,
         payment_details=settings.payment_details,
@@ -174,11 +297,16 @@ async def claim_payment(
     if callback.from_user is None or callback.bot is None:
         await callback.answer()
         return
+    hit = gate.check(CLAIM_PAID, callback.from_user.id, settings.paid_cooldown_seconds)
+    if hit is not None:
+        await callback.answer(cooldown_text(hit.retry_after_seconds), show_alert=True)
+        return
     user = await bind_user(callback.from_user, session)
     order = await mark_paid(session, callback_data.order_id, user.id)
     if order is None:
         await callback.answer("Заявка уже обработана", show_alert=True)
         return
+    gate.hit(CLAIM_PAID, callback.from_user.id)
     await callback.answer("Заявка отправлена на проверку")
     if isinstance(callback.message, Message):
         await clear_markup(callback.message)

@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     panel_proxies_json: str = '{"vless": {}}'
     panel_inbounds_json: str = "{}"
 
+    order_cooldown_seconds: int = 30
+    paid_cooldown_seconds: int = 20
+    reminder_days_before: int = 3
+    reminder_interval_seconds: int = 3600
+
     @field_validator(
         "admin_ids",
         "payment_title",

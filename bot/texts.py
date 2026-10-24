@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from html import escape
 
 from bot.models import Order, OrderStatus, Tariff, User
@@ -40,12 +40,60 @@ def welcome_text(*, support_contact: str, is_admin: bool) -> str:
         "Выберите тариф. Бот пришлёт QR и код платежа.",
         "Переведите сумму с этим кодом в комментарии и нажмите «Я оплатил».",
         "Ссылку доступа пришлю после проверки оплаты.",
+        "",
+        "Команды: /orders · /help · /faq",
     ]
     if support_contact:
         lines.extend(["", f"Поддержка: {e(support_contact)}"])
     if is_admin:
         lines.extend(["", "Вам доступна команда /admin."])
     return "\n".join(lines)
+
+
+def help_text(*, support_contact: str) -> str:
+    lines = [
+        "<b>Как подключиться</b>",
+        "",
+        "1. Оплатите тариф и дождитесь ссылки подписки.",
+        "2. Установите клиент (кнопка «Инструкция» или /help).",
+        "3. В клиенте добавьте подписку по ссылке из бота.",
+        "4. Включите профиль и проверьте интернет.",
+        "",
+        "<b>Клиенты</b>",
+        "• iOS / macOS — Streisand или Hiddify",
+        "• Android — v2rayNG или Hiddify",
+        "• Windows — Hiddify или Nekoray",
+        "",
+        "Ссылка вида <code>https://…/sub/…</code> — это подписка, не открывайте её в браузере как сайт.",
+    ]
+    if support_contact:
+        lines.extend(["", f"Поддержка: {e(support_contact)}"])
+    return "\n".join(lines)
+
+
+def faq_text(*, support_contact: str) -> str:
+    lines = [
+        "<b>FAQ</b>",
+        "",
+        "<b>Когда придёт доступ?</b>",
+        "После проверки оплаты администратором. Обычно в течение дня.",
+        "",
+        "<b>Что писать в комментарии к переводу?</b>",
+        "Код платежа вида <code>VPN-XXXXXX</code> из сообщения с QR.",
+        "",
+        "<b>Ссылка не работает</b>",
+        "Откройте «Мои заказы» → «Обновить ссылку» (если доступна) или напишите в поддержку.",
+        "",
+        "<b>Как продлить?</b>",
+        "Купите тот же или другой тариф заново — срок добавится к текущему.",
+    ]
+    if support_contact:
+        lines.extend(["", f"Поддержка: {e(support_contact)}"])
+    return "\n".join(lines)
+
+
+def cooldown_text(seconds: int) -> str:
+    return f"Подождите ещё {seconds} сек. и повторите."
 
 
 def tariffs_text(tariffs: list[Tariff], *, support_contact: str, is_admin: bool) -> str:
@@ -102,8 +150,47 @@ def access_granted_text(order: Order) -> str:
             "",
             "Ссылка подписки:",
             f"<code>{e(order.access_link)}</code>",
+            "",
+            "Дальше — кнопка «Инструкция» или команда /help.",
         ]
     )
+    return "\n".join(lines)
+
+
+def reminder_text(order: Order) -> str:
+    return "\n".join(
+        [
+            "<b>Подписка скоро закончится</b>",
+            "",
+            f"Тариф: {e(order.tariff_title)}",
+            f"Действует до: {format_dt(order.expires_at)}",
+            "",
+            "Продлите доступ заранее — срок добавится к текущему.",
+        ]
+    )
+
+
+def expired_text(order: Order) -> str:
+    return "\n".join(
+        [
+            "<b>Подписка истекла</b>",
+            "",
+            f"Тариф: {e(order.tariff_title)}",
+            f"Код: <code>{e(order.payment_code)}</code>",
+            "",
+            "Выберите тариф, чтобы продлить доступ.",
+        ]
+    )
+
+
+def refreshed_link_text(order: Order) -> str:
+    lines = [
+        "<b>Ссылка обновлена</b>",
+        "",
+        f"<code>{e(order.access_link)}</code>",
+    ]
+    if order.expires_at is not None:
+        lines.extend(["", f"Действует до: {format_dt(order.expires_at)}"])
     return "\n".join(lines)
 
 
@@ -118,12 +205,26 @@ def rejected_text(order: Order, *, support_contact: str) -> str:
     return "\n".join(lines)
 
 
+def _is_expired(order: Order) -> bool:
+    if order.expires_at is None:
+        return False
+    expires = order.expires_at
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=UTC)
+    return expires <= datetime.now(UTC)
+
+
 def _order_line(order: Order) -> str:
+    status = status_label(order.status)
+    if order.status == OrderStatus.fulfilled and _is_expired(order):
+        status = "истекла"
     line = (
         f"<code>{e(order.payment_code)}</code> · {e(order.tariff_title)} · "
-        f"{e(format_money(order.price_minor))} · {e(status_label(order.status))}"
+        f"{e(format_money(order.price_minor))} · {e(status)}"
     )
-    if order.status == OrderStatus.fulfilled and order.access_link:
+    if order.expires_at is not None and order.status == OrderStatus.fulfilled:
+        line += f"\nдо {format_dt(order.expires_at)}"
+    if order.status == OrderStatus.fulfilled and order.access_link and not _is_expired(order):
         line += f"\n<code>{e(order.access_link)}</code>"
     return line
 

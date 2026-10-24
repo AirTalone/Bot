@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bot.callbacks import AdminMenuAction, AdminOrderAction
 from bot.config import Settings
 from bot.filters import IsAdmin
-from bot.keyboards import admin_home_keyboard, order_keyboard, pending_list_keyboard
+from bot.keyboards import access_granted_keyboard, admin_home_keyboard, order_keyboard, pending_list_keyboard
 from bot.models import Order, OrderStatus
 from bot.services.orders import count_orders, fulfill_order, get_order, list_pending, reject_order
 from bot.services.panel import PanelError, build_panel_client
@@ -67,7 +67,11 @@ async def show_queue(message: Message, session: AsyncSession, *, edit: bool) -> 
 
 async def deliver_access(bot, order: Order, admin_message: Message) -> None:
     try:
-        await bot.send_message(order.user.telegram_id, access_granted_text(order))
+        await bot.send_message(
+            order.user.telegram_id,
+            access_granted_text(order),
+            reply_markup=access_granted_keyboard(),
+        )
     except TelegramForbiddenError:
         logger.info("user %s blocked the bot before delivery of order %s", order.user.telegram_id, order.id)
         await admin_message.answer(link_saved_undelivered_text(order))

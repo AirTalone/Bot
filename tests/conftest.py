@@ -3,6 +3,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import StaticPool
 
 from bot.db import create_session_factory, init_db
+from bot.services.cooldowns import gate
+
+
+@pytest.fixture(autouse=True)
+def _clear_cooldowns() -> None:
+    gate._last.clear()
 
 
 @pytest.fixture
