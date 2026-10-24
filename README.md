@@ -69,3 +69,11 @@ bot/
 ```
 
 Дальше сюда ложится выдача доступа из панели (3x-ui, Marzban и аналоги) вместо ручной вставки ссылки.
+
+## Скиллы агента и план продукта
+
+- Как пользоваться скиллами: [`docs/SKILLS_HOWTO.md`](docs/SKILLS_HOWTO.md)
+- Полный план до боевого запуска: [`docs/PRODUCT_ROADMAP.md`](docs/PRODUCT_ROADMAP.md)
+- Models для DAG: [`.cursor/models-vpn.json`](.cursor/models-vpn.json)
+- Установленные skills: [`.agents/skills/`](.agents/skills/) (lock: `skills-lock.json`)
+

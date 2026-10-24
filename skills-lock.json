@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "skills": {
+    "adding-docker": {
+      "source": "spencerpauly/awesome-cursor-skills",
+      "sourceType": "github",
+      "skillPath": "resources/adding-docker/SKILL.md",
+      "computedHash": "c02fce69841e90174a1bf0b936df74b0257e35ad723ce6b6c0f6fba2f986a6e7"
+    },
+    "alembic-migrations": {
+      "source": "robhowley/py-pit-skills",
+      "sourceType": "github",
+      "skillPath": "skills/alembic-migrations/SKILL.md",
+      "computedHash": "d4b6cc4b08bdcc4d1790e0cf2464bb118b72ed8db345af257116369ccb548722"
+    },
+    "auditing-security": {
+      "source": "spencerpauly/awesome-cursor-skills",
+      "sourceType": "github",
+      "skillPath": "resources/auditing-security/SKILL.md",
+      "computedHash": "a9da2b16a234fadd1cbda895fbae971d06e997a38e57a7aa6eb59b47bb52b7a8"
+    },
+    "building-skills-from-patterns": {
+      "source": "spencerpauly/awesome-cursor-skills",
+      "sourceType": "github",
+      "skillPath": "resources/building-skills-from-patterns/SKILL.md",
+      "computedHash": "9c3a97daabf42387c850d7cd4ae730d98d18258dc5093ace30128eaaace2665c"
+    },
+    "code-quality": {
+      "source": "robhowley/py-pit-skills",
+      "sourceType": "github",
+      "skillPath": "skills/code-quality/SKILL.md",
+      "computedHash": "693e1efcc565d9d628fd2d80483a1cd655a82cc7149a1ee4dbe464276b981d14"
+    },
+    "dag-task-runner": {
+      "source": "cursor/cookbook",
+      "sourceType": "github",
+      "skillPath": ".cursor/skills/dag-task-runner/SKILL.md",
+      "computedHash": "180bd03dc2d3dc26bed3d23b4d39c1c00263605d2997564542115e51e72223b6"
+    },
+    "grinding-until-pass": {
+      "source": "spencerpauly/awesome-cursor-skills",
+      "sourceType": "github",
+      "skillPath": "resources/grinding-until-pass/SKILL.md",
+      "computedHash": "0f19fd2326f6ed387def061f954369612eae543e490f47ccc8136852766969f8"
+    },
+    "parallel-code-review": {
+      "source": "spencerpauly/awesome-cursor-skills",
+      "sourceType": "github",
+      "skillPath": "resources/parallel-code-review/SKILL.md",
+      "computedHash": "b9043fdd2e1c87ac07794f11583bf0335988110d59e290a5da7d36a326a6ec5f"
+    },
+    "security-audit": {
+      "source": "cloudflare/security-audit-skill",
+      "sourceType": "github",
+      "skillPath": "skills/security-audit/SKILL.md",
+      "computedHash": "98b97aad2873b3b9a8e064007c25e7827b493ba27fda8bfbdb41dab586767973"
+    },
+    "setting-up-ci": {
+      "source": "spencerpauly/awesome-cursor-skills",
+      "sourceType": "github",
+      "skillPath": "resources/setting-up-ci/SKILL.md",
+      "computedHash": "71947f4f0c4b28e34a40a8bd4fb63bbe3eb451d482e4ce566a8794c9923fa295"
+    },
+    "settings-config": {
+      "source": "robhowley/py-pit-skills",
+      "sourceType": "github",
+      "skillPath": "skills/settings-config/SKILL.md",
+      "computedHash": "afe5052249c1a25a145dd30974773de1e401e40242947a5078257a5eac4333ac"
+    },
+    "sqlalchemy-models": {
+      "source": "robhowley/py-pit-skills",
+      "sourceType": "github",
+      "skillPath": "skills/sqlalchemy-models/SKILL.md",
+      "computedHash": "f97e46cf296d2f50bca5eaa96991785be7fb90937de6c5ac1ad3db25d9b86795"
+    },
+    "systematic-debugging": {
+      "source": "spencerpauly/awesome-cursor-skills",
+      "sourceType": "github",
+      "skillPath": "resources/systematic-debugging/SKILL.md",
+      "computedHash": "bc589d8370a294e47999250d33647c5a37c911d809b4afb39b34a7f069010eda"
+    },
+    "writing-tests": {
+      "source": "spencerpauly/awesome-cursor-skills",
+      "sourceType": "github",
+      "skillPath": "resources/writing-tests/SKILL.md",
+      "computedHash": "b94315519ae2499cc98deb6943b78f7eb2a72a20bbd8ef824c87dab3be556851"
+    },
+    "telegram-bot": {
+      "source": "timequity/vibe-coder",
+      "sourceType": "github",
+      "skillPath": "skills/telegram-bot/SKILL.md",
+      "computedHash": "fbf17484653fca0ed02fdfeec5db4da5dcc88b70696b27c1cb10a4ba416187b1"
+    },
+    "vpn-bot-playbook": {
+      "source": "local",
+      "sourceType": "local",
+      "skillPath": ".agents/skills/vpn-bot-playbook/SKILL.md",
+      "computedHash": "0a32628b15c0b0faa0f0d828fc1695e2a94aedc8099c5a5b3ab21e2564ce2165"
+    }
+  }
+}
