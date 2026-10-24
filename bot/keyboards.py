@@ -178,7 +178,11 @@ def admin_home_keyboard(*, maintenance: bool = False) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text="Экспорт CSV",
                     callback_data=AdminMenuAction(action="export").pack(),
-                )
+                ),
+                InlineKeyboardButton(
+                    text="Недельный отчёт",
+                    callback_data=AdminMenuAction(action="report").pack(),
+                ),
             ],
             [
                 InlineKeyboardButton(

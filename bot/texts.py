@@ -3,6 +3,7 @@ from html import escape
 
 from bot.models import Order, OrderStatus, Tariff, User
 from bot.services.admin_ops import AdminStats
+from bot.services.ops_report import WeeklyOpsReport
 from bot.services.payments import format_money
 
 STATUS_LABELS: dict[str, str] = {
@@ -266,7 +267,30 @@ def admin_home_text(stats: AdminStats) -> str:
             f"Ошибки панели сегодня: {stats.panel_errors_today}",
             f"Пользователей: {stats.users_total}",
             "",
-            "Очередь → подтверждение → ссылка. Поиск / рассылка / CSV — кнопки ниже.",
+            "Очередь → подтверждение → ссылка. Поиск / рассылка / CSV / отчёт — кнопки ниже.",
+            "Команда /report — недельный отчёт.",
+        ]
+    )
+
+
+def weekly_ops_report_text(report: WeeklyOpsReport) -> str:
+    return "\n".join(
+        [
+            f"<b>Недельный отчёт</b> ({report.window_days}д)",
+            f"окно: {format_dt(report.since)} — {format_dt(report.until)}",
+            "",
+            f"Active: {report.active_subs}",
+            f"Новые пользователи: {report.new_users}",
+            f"Выдано заказов: {report.fulfilled_count}",
+            f"Выручка за окно: {report.revenue_text}",
+            f"Approx MRR (30д): {report.approx_mrr_text}",
+            f"Истекло за окно: {report.expired_count}",
+            f"Churn proxy: {report.churn_proxy_pct:.1f}%",
+            f"Ошибки панели: {report.panel_errors}",
+            f"Сейчас на проверке: {report.pending_review}",
+            f"Оплаты Stars / QR: {report.stars_payments} / {report.qr_payments}",
+            "",
+            "MRR и churn — прокси по заказам бота, не бухгалтерия.",
         ]
     )
 

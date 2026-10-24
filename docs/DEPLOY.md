@@ -138,3 +138,5 @@ sudo journalctl -u vpnbot -n 50
 - Бэкапы: `docs/BACKUP.md`  
 - Инциденты: `docs/RUNBOOK.md`  
 - Надёжность: `docs/RELIABILITY.md`  
+- После запуска: `docs/OPS.md`  
+

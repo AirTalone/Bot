@@ -47,3 +47,5 @@
 - [ ] Анонс + мониторинг первые часы (`docker compose logs -f bot`)  
 
 Откат: техработы в `/admin`, при необходимости `docker compose -f compose.prod.yml stop bot`.
+
+После публичного запуска ведите календарь из [`docs/OPS.md`](OPS.md) (`/report`, патчи, ротация секретов).

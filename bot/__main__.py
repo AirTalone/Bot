@@ -32,6 +32,7 @@ async def setup_commands(bot: Bot, settings: Settings) -> None:
     admin_commands = [
         *user_commands,
         BotCommand(command="admin", description="Заявки на оплату"),
+        BotCommand(command="report", description="Недельный отчёт"),
     ]
     for admin_id in settings.admin_id_list:
         try:
