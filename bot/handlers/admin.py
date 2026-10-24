@@ -31,6 +31,7 @@ from bot.services.admin_ops import (
     set_maintenance,
 )
 from bot.services.delivery import deliver_access_link
+from bot.services.ops_report import collect_weekly_report
 from bot.services.orders import count_orders, fulfill_order, get_order, list_pending, reject_order
 from bot.services.panel import PanelError, build_panel_client
 from bot.services.payments import is_access_link
@@ -52,6 +53,7 @@ from bot.texts import (
     rejected_admin_text,
     rejected_text,
     search_results_text,
+    weekly_ops_report_text,
 )
 
 logger = logging.getLogger(__name__)
@@ -108,10 +110,31 @@ async def begin_manual_link(
         await callback.message.answer(ask_link_text(order))
 
 
+async def show_weekly_report(message: Message, session: AsyncSession, *, edit: bool) -> None:
+    report = await collect_weekly_report(session, window_days=7)
+    text = weekly_ops_report_text(report)
+    markup = admin_home_keyboard(maintenance=(await collect_stats(session)).maintenance)
+    if edit:
+        try:
+            await message.edit_text(text, reply_markup=markup)
+            return
+        except TelegramBadRequest:
+            logger.debug("failed to edit weekly report", exc_info=True)
+    await message.answer(text, reply_markup=markup)
+
+
 @router.message(Command("admin"))
 async def admin_home(message: Message, session: AsyncSession, state: FSMContext) -> None:
     await state.clear()
     await show_home(message, session, edit=False)
+
+
+@router.message(Command("report"))
+async def admin_report_command(message: Message, session: AsyncSession, state: FSMContext) -> None:
+    await state.clear()
+    if message.from_user is not None:
+        await record_audit(session, admin_telegram_id=message.from_user.id, action="weekly_report")
+    await show_weekly_report(message, session, edit=False)
 
 
 @router.callback_query(AdminMenuAction.filter(F.action == "home"))
@@ -147,6 +170,19 @@ async def admin_broadcast_start(callback: CallbackQuery, state: FSMContext) -> N
     await callback.answer()
     if isinstance(callback.message, Message):
         await callback.message.answer(ask_broadcast_text())
+
+
+@router.callback_query(AdminMenuAction.filter(F.action == "report"))
+async def admin_report_callback(
+    callback: CallbackQuery,
+    session: AsyncSession,
+) -> None:
+    if callback.from_user is None or not isinstance(callback.message, Message):
+        await callback.answer()
+        return
+    await record_audit(session, admin_telegram_id=callback.from_user.id, action="weekly_report")
+    await callback.answer()
+    await show_weekly_report(callback.message, session, edit=True)
 
 
 @router.callback_query(AdminMenuAction.filter(F.action == "export"))
