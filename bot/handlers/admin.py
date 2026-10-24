@@ -12,9 +12,11 @@ from bot.callbacks import AdminMenuAction, AdminOrderAction
 from bot.config import Settings
 from bot.filters import IsAdmin
 from bot.keyboards import admin_home_keyboard, order_keyboard, pending_list_keyboard
-from bot.models import OrderStatus
+from bot.models import Order, OrderStatus
 from bot.services.orders import count_orders, fulfill_order, get_order, list_pending, reject_order
+from bot.services.panel import PanelError, build_panel_client
 from bot.services.payments import is_access_link
+from bot.services.provisioning import provision_and_fulfill
 from bot.states import AdminLinkStates
 from bot.texts import (
     access_granted_text,
@@ -23,6 +25,7 @@ from bot.texts import (
     ask_link_text,
     link_saved_undelivered_text,
     link_sent_text,
+    panel_failed_text,
     pending_list_text,
     rejected_admin_text,
     rejected_text,
@@ -62,6 +65,32 @@ async def show_queue(message: Message, session: AsyncSession, *, edit: bool) -> 
     await message.answer(text, reply_markup=markup)
 
 
+async def deliver_access(bot, order: Order, admin_message: Message) -> None:
+    try:
+        await bot.send_message(order.user.telegram_id, access_granted_text(order))
+    except TelegramForbiddenError:
+        logger.info("user %s blocked the bot before delivery of order %s", order.user.telegram_id, order.id)
+        await admin_message.answer(link_saved_undelivered_text(order))
+        return
+    except TelegramAPIError:
+        logger.exception("failed to deliver access link for order %s", order.id)
+        await admin_message.answer(link_saved_undelivered_text(order))
+        return
+    await admin_message.answer(link_sent_text(order))
+
+
+async def begin_manual_link(
+    callback: CallbackQuery,
+    order: Order,
+    state: FSMContext,
+) -> None:
+    await state.set_state(AdminLinkStates.waiting_link)
+    await state.update_data(order_id=order.id)
+    await callback.answer()
+    if isinstance(callback.message, Message):
+        await callback.message.answer(ask_link_text(order))
+
+
 @router.message(Command("admin"))
 async def admin_home(message: Message, session: AsyncSession, state: FSMContext) -> None:
     await state.clear()
@@ -82,6 +111,7 @@ async def open_order(
     callback: CallbackQuery,
     callback_data: AdminOrderAction,
     session: AsyncSession,
+    settings: Settings,
 ) -> None:
     if not isinstance(callback.message, Message):
         await callback.answer()
@@ -91,14 +121,54 @@ async def open_order(
         await callback.answer("Заявка уже обработана", show_alert=True)
         return
     await callback.answer()
+    text = admin_order_text(order, panel_enabled=settings.panel_enabled)
+    markup = order_keyboard(order.id, panel_enabled=settings.panel_enabled)
     try:
-        await callback.message.edit_text(admin_order_text(order), reply_markup=order_keyboard(order.id))
+        await callback.message.edit_text(text, reply_markup=markup)
     except TelegramBadRequest:
-        await callback.message.answer(admin_order_text(order), reply_markup=order_keyboard(order.id))
+        await callback.message.answer(text, reply_markup=markup)
 
 
 @router.callback_query(AdminOrderAction.filter(F.action == "confirm"))
-async def start_link_input(
+async def confirm_order(
+    callback: CallbackQuery,
+    callback_data: AdminOrderAction,
+    session: AsyncSession,
+    settings: Settings,
+    state: FSMContext,
+) -> None:
+    order = await get_order(session, callback_data.order_id)
+    if order is None or order.status != OrderStatus.pending_review:
+        await callback.answer("Заявка уже обработана", show_alert=True)
+        return
+    if not settings.panel_enabled:
+        await begin_manual_link(callback, order, state)
+        return
+
+    panel = None
+    try:
+        panel = build_panel_client(settings)
+        if panel is None:
+            raise PanelError("panel client is not configured")
+        await callback.answer("Выдаю доступ через панель…")
+        fulfilled = await provision_and_fulfill(session, order, panel)
+    except PanelError as exc:
+        logger.warning("panel provision failed for order %s: %s", order.id, exc)
+        await callback.answer("Панель недоступна", show_alert=True)
+        if isinstance(callback.message, Message):
+            await callback.message.answer(panel_failed_text(order, str(exc)))
+        return
+    finally:
+        if panel is not None:
+            await panel.aclose()
+
+    if callback.bot is None or not isinstance(callback.message, Message):
+        return
+    await deliver_access(callback.bot, fulfilled, callback.message)
+
+
+@router.callback_query(AdminOrderAction.filter(F.action == "manual"))
+async def manual_link(
     callback: CallbackQuery,
     callback_data: AdminOrderAction,
     session: AsyncSession,
@@ -108,11 +178,7 @@ async def start_link_input(
     if order is None or order.status != OrderStatus.pending_review:
         await callback.answer("Заявка уже обработана", show_alert=True)
         return
-    await state.set_state(AdminLinkStates.waiting_link)
-    await state.update_data(order_id=order.id)
-    await callback.answer()
-    if isinstance(callback.message, Message):
-        await callback.message.answer(ask_link_text(order))
+    await begin_manual_link(callback, order, state)
 
 
 @router.callback_query(AdminOrderAction.filter(F.action == "reject"))
@@ -179,17 +245,7 @@ async def receive_access_link(
     if order is None or message.bot is None:
         await message.answer("Заявка уже обработана.")
         return
-    try:
-        await message.bot.send_message(order.user.telegram_id, access_granted_text(order))
-    except TelegramForbiddenError:
-        logger.info("user %s blocked the bot before delivery of order %s", order.user.telegram_id, order.id)
-        await message.answer(link_saved_undelivered_text(order))
-        return
-    except TelegramAPIError:
-        logger.exception("failed to deliver access link for order %s", order.id)
-        await message.answer(link_saved_undelivered_text(order))
-        return
-    await message.answer(link_sent_text(order))
+    await deliver_access(message.bot, order, message)
 
 
 @router.message(AdminLinkStates.waiting_link, ~F.text)

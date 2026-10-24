@@ -81,15 +81,27 @@ def pending_list_keyboard(orders: list[Order]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def order_keyboard(order_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+def order_keyboard(order_id: int, *, panel_enabled: bool = False) -> InlineKeyboardMarkup:
+    confirm_text = "Подтвердить и выдать из панели" if panel_enabled else "Подтвердить и вставить ссылку"
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=confirm_text,
+                callback_data=AdminOrderAction(order_id=order_id, action="confirm").pack(),
+            )
+        ]
+    ]
+    if panel_enabled:
+        rows.append(
             [
                 InlineKeyboardButton(
-                    text="Подтвердить и выдать ссылку",
-                    callback_data=AdminOrderAction(order_id=order_id, action="confirm").pack(),
+                    text="Вставить ссылку вручную",
+                    callback_data=AdminOrderAction(order_id=order_id, action="manual").pack(),
                 )
-            ],
+            ]
+        )
+    rows.extend(
+        [
             [
                 InlineKeyboardButton(
                     text="Отклонить",
@@ -104,3 +116,4 @@ def order_keyboard(order_id: int) -> InlineKeyboardMarkup:
             ],
         ]
     )
+    return InlineKeyboardMarkup(inline_keyboard=rows)

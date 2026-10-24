@@ -89,17 +89,22 @@ def cancelled_text(order: Order) -> str:
 
 
 def access_granted_text(order: Order) -> str:
-    return "\n".join(
+    lines = [
+        "<b>Оплата подтверждена</b>",
+        "",
+        f"Тариф: {e(order.tariff_title)} ({order.duration_days} дн.)",
+        f"Код: <code>{e(order.payment_code)}</code>",
+    ]
+    if order.expires_at is not None:
+        lines.append(f"Действует до: {format_dt(order.expires_at)}")
+    lines.extend(
         [
-            "<b>Оплата подтверждена</b>",
             "",
-            f"Тариф: {e(order.tariff_title)} ({order.duration_days} дн.)",
-            f"Код: <code>{e(order.payment_code)}</code>",
-            "",
-            "Ссылка доступа:",
+            "Ссылка подписки:",
             f"<code>{e(order.access_link)}</code>",
         ]
     )
+    return "\n".join(lines)
 
 
 def rejected_text(order: Order, *, support_contact: str) -> str:
@@ -157,17 +162,32 @@ def pending_list_text(orders: list[Order], total: int) -> str:
     return "\n".join(lines)
 
 
-def admin_order_text(order: Order) -> str:
+def admin_order_text(order: Order, *, panel_enabled: bool = False) -> str:
+    lines = [
+        f"<b>Заявка #{order.id}</b>",
+        f"Статус: {e(status_label(order.status))}",
+        f"Код: <code>{e(order.payment_code)}</code>",
+        f"Тариф: {e(order.tariff_title)} ({order.duration_days} дн.)",
+        f"Сумма: {e(format_money(order.price_minor))}",
+        f"Пользователь: {e(user_label(order.user))}",
+        f"id: <code>{order.user.telegram_id}</code>",
+        f"Создана: {format_dt(order.created_at)}",
+    ]
+    if panel_enabled:
+        lines.extend(["", "Панель: Marzban включена. «Подтвердить» создаст/продлит пользователя автоматически."])
+    return "\n".join(lines)
+
+
+def panel_failed_text(order: Order, detail: str) -> str:
+    short = detail.strip()
+    if len(short) > 400:
+        short = short[:399] + "…"
     return "\n".join(
         [
-            f"<b>Заявка #{order.id}</b>",
-            f"Статус: {e(status_label(order.status))}",
-            f"Код: <code>{e(order.payment_code)}</code>",
-            f"Тариф: {e(order.tariff_title)} ({order.duration_days} дн.)",
-            f"Сумма: {e(format_money(order.price_minor))}",
-            f"Пользователь: {e(user_label(order.user))}",
-            f"id: <code>{order.user.telegram_id}</code>",
-            f"Создана: {format_dt(order.created_at)}",
+            f"Не удалось выдать доступ по заявке <code>{e(order.payment_code)}</code> через панель.",
+            e(short),
+            "",
+            "Заявка осталась на проверке. Нажмите «Вставить ссылку вручную» или повторите подтверждение.",
         ]
     )
 

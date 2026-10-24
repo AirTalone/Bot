@@ -20,6 +20,14 @@ class Settings(BaseSettings):
     support_contact: str = ""
     auto_create_sqlite: bool = True
 
+    panel_enabled: bool = False
+    panel_provider: str = "marzban"
+    panel_base_url: str = ""
+    panel_username: str = ""
+    panel_password: str = ""
+    panel_proxies_json: str = '{"vless": {}}'
+    panel_inbounds_json: str = "{}"
+
     @field_validator(
         "admin_ids",
         "payment_title",
@@ -28,6 +36,12 @@ class Settings(BaseSettings):
         "support_contact",
         "bot_token",
         "database_url",
+        "panel_provider",
+        "panel_base_url",
+        "panel_username",
+        "panel_password",
+        "panel_proxies_json",
+        "panel_inbounds_json",
     )
     @classmethod
     def strip_text(cls, value: str) -> str:

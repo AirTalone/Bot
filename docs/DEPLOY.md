@@ -57,4 +57,4 @@ ruff check bot tests alembic
 python -m pytest -q
 ```
 
-Дальше по плану: `docs/PRODUCT_ROADMAP.md` → фаза 2 (панель VPN).
+Дальше: поставьте Marzban по `docs/MARZBAN.md`, включите `PANEL_ENABLED=true` и проверьте выдачу из `/admin`.
