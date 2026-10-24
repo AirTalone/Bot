@@ -14,7 +14,8 @@
 При `PANEL_ENABLED=true` админ «Подтвердить» создаёт/продлевает пользователя в Marzban и шлёт subscription URL.  
 `/admin`: статистика, поиск, CSV, рассылка, техработы, отключение в панели.  
 Опционально `STARS_ENABLED=true`: оплата Telegram Stars с автовыдачей; QR/перевод остаётся запасным способом.  
-Надёжность: `docs/RELIABILITY.md`, бэкапы `docs/BACKUP.md`, инциденты `docs/RUNBOOK.md`.
+Надёжность: `docs/RELIABILITY.md`, бэкапы `docs/BACKUP.md`, инциденты `docs/RUNBOOK.md`.  
+Прод: `docs/DEPLOY.md` (15 команд), чеклист `docs/GO_LIVE.md`, файлы в `deploy/`.
 
 Отклоненная заявка остаётся в истории со статусом «отклонена». Новая неоплаченная заявка отменяет предыдущий неоплаченный счёт того же пользователя. Заявка, которая уже на проверке, при этом не трогается.
 
@@ -29,10 +30,12 @@ cp .env.example .env
 # заполните BOT_TOKEN, ADMIN_IDS, PAYMENT_DETAILS, POSTGRES_PASSWORD
 docker compose up -d --build
 docker compose logs -f bot
-# prod: docker compose -f docker-compose.prod.yml up -d --build
+# prod:
+# cp deploy/env.prod.example .env && chmod 600 .env
+# ./scripts/deploy_prod.sh
 ```
 
-Подробнее: [`docs/DEPLOY.md`](docs/DEPLOY.md).
+Подробнее: [`docs/DEPLOY.md`](docs/DEPLOY.md) · [`docs/GO_LIVE.md`](docs/GO_LIVE.md).
 
 ### Локально на SQLite
 
