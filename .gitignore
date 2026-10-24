@@ -5,6 +5,10 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .env
+.env.prod
+.env.*.local
 data/
+backups/
+*.sql.gz
 *.db
 node_modules/

@@ -1,0 +1,18 @@
+# Optional reverse proxy when you add HTTPS webhook / public health later.
+# Polling-only bot does NOT require this.
+#
+# Install Caddy on the host, point DNS A/AAAA to this VPS, then:
+#   sudo cp deploy/Caddyfile.example /etc/caddy/Caddyfile
+#   sudo systemctl reload caddy
+
+bot.example.com {
+	# Example: forward a future webhook path to a sidecar on localhost.
+	# handle /telegram/webhook* {
+	# 	reverse_proxy 127.0.0.1:8080
+	# }
+
+	respond /healthz 200 {
+		body "ok"
+		close
+	}
+}

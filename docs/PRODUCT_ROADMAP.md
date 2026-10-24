@@ -19,7 +19,8 @@
 7. Админка: stats, поиск, CSV, рассылка, техработы, audit;
 8. Telegram Stars + QR fallback;
 9. Надёжность: бэкапы, heartbeat, Sentry, runbook;
-10. pytest на статусы и e2e-флоу без Telegram.
+10. Деплой-кит: compose.prod, systemd, ufw, GO_LIVE;
+11. pytest на статусы и e2e-флоу без Telegram.
 
 Дальше не «переписывать с нуля чужой магазин», а **дожать свой бот** и подключить панель выдачи.
 
@@ -207,16 +208,16 @@
 
 ### Фаза 9 — Деплой «осталось залить»
 
-81. Один `docker compose -f compose.prod.yml up -d` на VPS бота.
-82. `.env.prod` только на сервере (не в git).
-83. Systemd или restart policy `unless-stopped`.
-84. TLS (Caddy/Nginx) если есть webhook/sub domain.
-85. Firewall: наружу только 443/нужные порты Xray; SSH ключом.
-86. Отдельный deploy user, без root для приложения.
-87. Документ `docs/DEPLOY.md`: 15 команд от нуля до живого бота.
-88. Чеклист go-live (ниже) — все пункты зелёные.
-89. Мягкий запуск: 5–10 друзей, сбор багов 48 часов.
-90. Публичный запуск.
+81. ~~`compose.prod.yml` / `scripts/deploy_prod.sh`~~  
+82. ~~`deploy/env.prod.example` → `.env` на сервере; `.env`/`.env.prod` в `.gitignore`~~  
+83. ~~`deploy/vpnbot.service` + `restart: unless-stopped`~~  
+84. ~~`deploy/Caddyfile.example` (опц. TLS/webhook)~~  
+85. ~~`deploy/ufw-setup.sh`~~  
+86. ~~deploy-user в `docs/DEPLOY.md`~~  
+87. ~~`docs/DEPLOY.md` — 15 команд от нуля~~  
+88. ~~`docs/GO_LIVE.md` чеклист~~  
+89. ~~Мягкий запуск описан в GO_LIVE §D~~  
+90. ~~Публичный запуск — §E после зелёного чеклиста (делает оператор на VPS)~~
 
 ### Фаза 10 — После запуска (чтобы «великолепно» держалось)
 
@@ -230,16 +231,16 @@
 
 ## 4. Go-live checklist
 
-- [ ] Бот отвечает на `/start` с продакшен-токеном  
-- [ ] Админ получает заявку после «Я оплатил»  
-- [ ] Confirm создаёт юзера в панели и шлёт рабочую sub-ссылку  
-- [ ] Клиент реально ходит в интернет через ноду  
-- [ ] Reject не выдаёт доступ  
-- [ ] Повторное нажатие paid/fulfill безопасно  
-- [ ] Бэкап восстановлен хотя бы один раз на тестовой машине  
-- [ ] Секреты не в git (`gitleaks` clean)  
-- [ ] pytest зелёный в CI  
-- [ ] security-audit: нет открытых Critical/High без решения  
+Актуальная версия с мягким запуском: **`docs/GO_LIVE.md`**.
+
+Кратко:
+
+- [ ] `/start` на прод-токене; админ тоже сделал `/start`  
+- [ ] Заявка → confirm → рабочая sub-ссылка / клиент онлайн  
+- [ ] Reject и повторные paid/fulfill/Stars безопасны  
+- [ ] Бэкап + restore drill; секреты не в git; CI зелёный  
+- [ ] security-audit без открытых Critical/High  
+
 
 ---
 
