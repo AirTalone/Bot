@@ -4,10 +4,10 @@ from aiogram import F, Router
 from aiogram.enums import ChatType
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandObject, CommandStart
-from aiogram.types import BufferedInputFile, CallbackQuery, Message, User as TelegramUser
+from aiogram.types import BufferedInputFile, CallbackQuery, LabeledPrice, Message, User as TelegramUser
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.callbacks import CheckoutAction, MenuAction, OrderAction, TariffSelect
+from bot.callbacks import CheckoutAction, MenuAction, OrderAction, PayMethodAction, TariffSelect
 from bot.config import Settings
 from bot.keyboards import (
     checkout_keyboard,
@@ -15,27 +15,32 @@ from bot.keyboards import (
     help_keyboard,
     order_keyboard,
     orders_keyboard,
+    pay_method_keyboard,
     tariffs_keyboard,
 )
-from bot.models import User
+from bot.models import Order, OrderStatus, User
 from bot.notifications import notify_admins
 from bot.services.admin_ops import is_maintenance
 from bot.services.cooldowns import CLAIM_PAID, ORDER_CREATE, gate
 from bot.services.orders import (
     cancel_awaiting,
     create_order,
+    get_order,
     get_tariff,
     list_active_tariffs,
     list_user_orders,
     mark_paid,
+    set_order_payment_method,
     upsert_user,
 )
 from bot.services.panel import PanelError, build_panel_client
 from bot.services.payments import build_qr_payload, format_money, render_qr_png
 from bot.services.reminders import refresh_subscription_link
+from bot.services.stars import STARS_CURRENCY, encode_stars_payload
 from bot.texts import (
     admin_order_text,
     cancelled_text,
+    choose_payment_text,
     claimed_text,
     cooldown_text,
     faq_text,
@@ -44,6 +49,8 @@ from bot.texts import (
     orders_text,
     payment_caption,
     refreshed_link_text,
+    stars_invoice_description,
+    stars_invoice_title,
     tariffs_text,
 )
 from bot.utils import telegram_full_name
@@ -257,6 +264,21 @@ async def refresh_link(
         await callback.message.answer(refreshed_link_text(order))
 
 
+async def send_qr_checkout(message: Message, order: Order, settings: Settings) -> None:
+    payload = build_qr_payload(
+        payment_title=settings.payment_title,
+        payment_details=settings.payment_details,
+        static_payload=settings.payment_qr_payload,
+        amount=format_money(order.price_minor),
+        payment_code=order.payment_code,
+    )
+    await message.answer_photo(
+        BufferedInputFile(render_qr_png(payload), filename=f"{order.payment_code}.png"),
+        caption=payment_caption(order, payment_details=settings.payment_details),
+        reply_markup=checkout_keyboard(order.id),
+    )
+
+
 @router.callback_query(TariffSelect.filter())
 async def choose_tariff(
     callback: CallbackQuery,
@@ -279,20 +301,87 @@ async def choose_tariff(
         await callback.answer("Тариф недоступен", show_alert=True)
         return
     user = await bind_user(callback.from_user, session)
-    order = await create_order(session, user, tariff)
-    gate.hit(ORDER_CREATE, callback.from_user.id)
-    payload = build_qr_payload(
-        payment_title=settings.payment_title,
-        payment_details=settings.payment_details,
-        static_payload=settings.payment_qr_payload,
-        amount=format_money(order.price_minor),
-        payment_code=order.payment_code,
+    stars_amount = int(tariff.stars_price or 0)
+    use_stars = settings.stars_enabled and stars_amount > 0
+    order = await create_order(
+        session,
+        user,
+        tariff,
+        payment_method="qr",
+        stars_amount=stars_amount if use_stars else None,
     )
+    gate.hit(ORDER_CREATE, callback.from_user.id)
     await callback.answer()
-    await callback.message.answer_photo(
-        BufferedInputFile(render_qr_png(payload), filename=f"{order.payment_code}.png"),
-        caption=payment_caption(order, payment_details=settings.payment_details),
-        reply_markup=checkout_keyboard(order.id),
+    if use_stars:
+        await callback.message.answer(
+            choose_payment_text(order, stars_amount=stars_amount),
+            reply_markup=pay_method_keyboard(order.id, stars_amount=stars_amount),
+        )
+        return
+    await send_qr_checkout(callback.message, order, settings)
+
+
+@router.callback_query(PayMethodAction.filter(F.method == "qr"))
+async def pay_with_qr(
+    callback: CallbackQuery,
+    callback_data: PayMethodAction,
+    session: AsyncSession,
+    settings: Settings,
+) -> None:
+    if callback.from_user is None or not isinstance(callback.message, Message):
+        await callback.answer()
+        return
+    user = await bind_user(callback.from_user, session)
+    order = await set_order_payment_method(session, callback_data.order_id, user.id, payment_method="qr")
+    if order is None:
+        await callback.answer("Заявка уже обработана", show_alert=True)
+        return
+    await callback.answer()
+    await clear_markup(callback.message)
+    await send_qr_checkout(callback.message, order, settings)
+
+
+@router.callback_query(PayMethodAction.filter(F.method == "stars"))
+async def pay_with_stars(
+    callback: CallbackQuery,
+    callback_data: PayMethodAction,
+    session: AsyncSession,
+    settings: Settings,
+) -> None:
+    if callback.from_user is None or not isinstance(callback.message, Message):
+        await callback.answer()
+        return
+    if not settings.stars_enabled:
+        await callback.answer("Stars выключены", show_alert=True)
+        return
+    user = await bind_user(callback.from_user, session)
+    order = await get_order(session, callback_data.order_id)
+    if order is None or order.user_id != user.id or order.status != OrderStatus.awaiting_payment.value:
+        await callback.answer("Заявка уже обработана", show_alert=True)
+        return
+    stars_amount = int(order.stars_amount or 0)
+    if stars_amount < 1:
+        await callback.answer("Для тарифа не задана цена в Stars", show_alert=True)
+        return
+    order = await set_order_payment_method(
+        session,
+        order.id,
+        user.id,
+        payment_method="stars",
+        stars_amount=stars_amount,
+    )
+    if order is None:
+        await callback.answer("Заявка уже обработана", show_alert=True)
+        return
+    await callback.answer()
+    await clear_markup(callback.message)
+    await callback.message.answer_invoice(
+        title=stars_invoice_title(order),
+        description=stars_invoice_description(order),
+        payload=encode_stars_payload(order_id=order.id, payment_code=order.payment_code),
+        currency=STARS_CURRENCY,
+        prices=[LabeledPrice(label=order.tariff_title, amount=stars_amount)],
+        provider_token="",
     )
 
 

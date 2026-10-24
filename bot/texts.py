@@ -103,6 +103,20 @@ def tariffs_text(tariffs: list[Tariff], *, support_contact: str, is_admin: bool)
     return welcome_text(support_contact=support_contact, is_admin=is_admin)
 
 
+def choose_payment_text(order: Order, *, stars_amount: int) -> str:
+    return "\n".join(
+        [
+            f"<b>{e(order.tariff_title)}</b>",
+            f"Код: <code>{e(order.payment_code)}</code>",
+            "",
+            f"Stars: {stars_amount} ⭐ — доступ сразу после оплаты.",
+            f"Перевод: {e(format_money(order.price_minor))} — проверка админом.",
+            "",
+            "Выберите способ оплаты.",
+        ]
+    )
+
+
 def payment_caption(order: Order, *, payment_details: str) -> str:
     details = payment_details.strip()
     if len(details) > 700:
@@ -335,19 +349,47 @@ def pending_list_text(orders: list[Order], total: int) -> str:
 
 
 def admin_order_text(order: Order, *, panel_enabled: bool = False) -> str:
+    method = "Stars" if order.payment_method == "stars" else "перевод / QR"
     lines = [
         f"<b>Заявка #{order.id}</b>",
         f"Статус: {e(status_label(order.status))}",
         f"Код: <code>{e(order.payment_code)}</code>",
+        f"Способ: {method}",
         f"Тариф: {e(order.tariff_title)} ({order.duration_days} дн.)",
         f"Сумма: {e(format_money(order.price_minor))}",
-        f"Пользователь: {e(user_label(order.user))}",
-        f"id: <code>{order.user.telegram_id}</code>",
-        f"Создана: {format_dt(order.created_at)}",
     ]
+    if order.payment_method == "stars" and order.stars_amount:
+        lines.append(f"Stars: {order.stars_amount} ⭐")
+    lines.extend(
+        [
+            f"Пользователь: {e(user_label(order.user))}",
+            f"id: <code>{order.user.telegram_id}</code>",
+            f"Создана: {format_dt(order.created_at)}",
+        ]
+    )
+    if order.payment_method == "stars":
+        lines.extend(["", "Оплата Stars уже подтверждена Telegram."])
     if panel_enabled:
         lines.extend(["", "Панель: Marzban включена. «Подтвердить» создаст/продлит пользователя автоматически."])
     return "\n".join(lines)
+
+
+def stars_paid_pending_text(order: Order) -> str:
+    return "\n".join(
+        [
+            f"Оплата Stars по заявке <code>{e(order.payment_code)}</code> получена.",
+            "",
+            "Панель выключена — админ вставит ссылку вручную. Напишу, как только доступ будет готов.",
+        ]
+    )
+
+
+def stars_invoice_title(order: Order) -> str:
+    return f"VPN · {order.tariff_title}"[:32]
+
+
+def stars_invoice_description(order: Order) -> str:
+    return f"Доступ на {order.duration_days} дн. Код {order.payment_code}"[:255]
 
 
 def panel_failed_text(order: Order, detail: str) -> str:

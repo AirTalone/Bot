@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 from aiogram import F, Router
 from aiogram.enums import ChatType
-from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramRetryAfter
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
@@ -14,7 +14,6 @@ from bot.callbacks import AdminBroadcastAction, AdminMenuAction, AdminOrderActio
 from bot.config import Settings
 from bot.filters import IsAdmin
 from bot.keyboards import (
-    access_granted_keyboard,
     admin_home_keyboard,
     broadcast_confirm_keyboard,
     order_keyboard,
@@ -31,13 +30,13 @@ from bot.services.admin_ops import (
     search_orders,
     set_maintenance,
 )
+from bot.services.delivery import deliver_access_link
 from bot.services.orders import count_orders, fulfill_order, get_order, list_pending, reject_order
 from bot.services.panel import PanelError, build_panel_client
 from bot.services.payments import is_access_link
 from bot.services.provisioning import provision_and_fulfill
 from bot.states import AdminBroadcastStates, AdminLinkStates, AdminSearchStates
 from bot.texts import (
-    access_granted_text,
     admin_home_text,
     admin_order_text,
     ask_broadcast_text,
@@ -90,21 +89,11 @@ async def show_queue(message: Message, session: AsyncSession, *, edit: bool) -> 
 
 
 async def deliver_access(bot, order: Order, admin_message: Message) -> None:
-    try:
-        await bot.send_message(
-            order.user.telegram_id,
-            access_granted_text(order),
-            reply_markup=access_granted_keyboard(),
-        )
-    except TelegramForbiddenError:
-        logger.info("user %s blocked the bot before delivery of order %s", order.user.telegram_id, order.id)
+    ok = await deliver_access_link(bot, order)
+    if ok:
+        await admin_message.answer(link_sent_text(order))
+    else:
         await admin_message.answer(link_saved_undelivered_text(order))
-        return
-    except TelegramAPIError:
-        logger.exception("failed to deliver access link for order %s", order.id)
-        await admin_message.answer(link_saved_undelivered_text(order))
-        return
-    await admin_message.answer(link_sent_text(order))
 
 
 async def begin_manual_link(
