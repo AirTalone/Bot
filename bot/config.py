@@ -37,6 +37,14 @@ class Settings(BaseSettings):
 
     stars_enabled: bool = False
 
+    log_json: bool = False
+    sentry_dsn: str = ""
+    sentry_environment: str = "production"
+    heartbeat_path: str = "/tmp/bot_heartbeat"
+    heartbeat_seconds: int = 30
+    heartbeat_alert_seconds: int = 0
+    heartbeat_startup_notify: bool = False
+
     @field_validator(
         "admin_ids",
         "payment_title",
@@ -51,6 +59,9 @@ class Settings(BaseSettings):
         "panel_password",
         "panel_proxies_json",
         "panel_inbounds_json",
+        "sentry_dsn",
+        "sentry_environment",
+        "heartbeat_path",
     )
     @classmethod
     def strip_text(cls, value: str) -> str:

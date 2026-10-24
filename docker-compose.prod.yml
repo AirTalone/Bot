@@ -1,0 +1,58 @@
+# Production stack: Postgres is not published to the host.
+# Usage: docker compose -f docker-compose.prod.yml up -d --build
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: vpnbot
+      POSTGRES_USER: vpnbot
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vpnbot -d vpnbot"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  migrate:
+    build: .
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://vpnbot:${POSTGRES_PASSWORD}@db:5432/vpnbot
+      BOT_TOKEN: ${BOT_TOKEN:-migrate-placeholder}
+    command: ["sh", "-c", "alembic upgrade head && python -m bot.seed"]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  bot:
+    build: .
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://vpnbot:${POSTGRES_PASSWORD}@db:5432/vpnbot
+      AUTO_CREATE_SQLITE: "false"
+      LOG_JSON: ${LOG_JSON:-true}
+      HEARTBEAT_PATH: /tmp/bot_heartbeat
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import os,time,sys,pathlib; p=os.environ.get('HEARTBEAT_PATH','/tmp/bot_heartbeat'); f=pathlib.Path(p); sys.exit(0 if f.exists() and time.time()-f.stat().st_mtime<=90 else 1)\"",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  pgdata:
