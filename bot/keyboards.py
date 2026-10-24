@@ -1,6 +1,12 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from bot.callbacks import AdminMenuAction, AdminOrderAction, CheckoutAction, MenuAction, TariffSelect
+from bot.callbacks import (
+    AdminMenuAction,
+    AdminOrderAction,
+    CheckoutAction,
+    MenuAction,
+    TariffSelect,
+)
 from bot.models import Order, Tariff
 from bot.services.payments import format_money
 

@@ -1,0 +1,16 @@
+target-version = "py311"
+line-length = 100
+src = ["bot", "tests"]
+
+[lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[lint.per-file-ignores]
+"alembic/**" = ["I001", "UP007", "UP035"]
+"tests/**" = ["B018", "I001", "UP017"]
+"bot/handlers/**" = ["I001"]
+"bot/db.py" = ["I001"]
+
+[format]
+quote-style = "double"
