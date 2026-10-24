@@ -14,6 +14,7 @@ services:
       retries: 10
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
+    restart: unless-stopped
 
   migrate:
     build: .
@@ -35,10 +36,21 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://vpnbot:${POSTGRES_PASSWORD:-vpnbot}@db:5432/vpnbot
       AUTO_CREATE_SQLITE: "false"
+      HEARTBEAT_PATH: /tmp/bot_heartbeat
     depends_on:
       migrate:
         condition: service_completed_successfully
     restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import os,time,sys,pathlib; p=os.environ.get('HEARTBEAT_PATH','/tmp/bot_heartbeat'); f=pathlib.Path(p); sys.exit(0 if f.exists() and time.time()-f.stat().st_mtime<=90 else 1)\"",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
 
 volumes:
   pgdata:

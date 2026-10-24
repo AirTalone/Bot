@@ -13,7 +13,8 @@
 Дополнительно: `/help` и FAQ, напоминание до истечения срока, кнопка «Продлить».  
 При `PANEL_ENABLED=true` админ «Подтвердить» создаёт/продлевает пользователя в Marzban и шлёт subscription URL.  
 `/admin`: статистика, поиск, CSV, рассылка, техработы, отключение в панели.  
-Опционально `STARS_ENABLED=true`: оплата Telegram Stars с автовыдачей; QR/перевод остаётся запасным способом.
+Опционально `STARS_ENABLED=true`: оплата Telegram Stars с автовыдачей; QR/перевод остаётся запасным способом.  
+Надёжность: `docs/RELIABILITY.md`, бэкапы `docs/BACKUP.md`, инциденты `docs/RUNBOOK.md`.
 
 Отклоненная заявка остаётся в истории со статусом «отклонена». Новая неоплаченная заявка отменяет предыдущий неоплаченный счёт того же пользователя. Заявка, которая уже на проверке, при этом не трогается.
 
@@ -28,6 +29,7 @@ cp .env.example .env
 # заполните BOT_TOKEN, ADMIN_IDS, PAYMENT_DETAILS, POSTGRES_PASSWORD
 docker compose up -d --build
 docker compose logs -f bot
+# prod: docker compose -f docker-compose.prod.yml up -d --build
 ```
 
 Подробнее: [`docs/DEPLOY.md`](docs/DEPLOY.md).

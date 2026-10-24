@@ -78,6 +78,26 @@ PANEL_INBOUNDS_JSON={}
 Бот создаёт username вида `tg<telegram_id>` (например `tg42`).  
 Повторная покупка того же Telegram-аккаунта **продлевает** expire от `max(now, current_expire)`.
 
+## 8. Лимиты устройств / мультинода (ops)
+
+Marzban сам по себе слабее Remnawave по HWID. Практичные рычаги:
+
+- один пользователь = один subscription URL; не плодите дубликаты вручную;
+- лимиты на уровне inbound/ноды и разумный `data_limit`, если нужен;
+- вторая нода: добавляйте в Marzban Node, когда упираетесь в канал/CPU — боту менять код не нужно, он выдаёт тот же API user.
+
+Если критичны device limits / вебхуки — позже смотрите Remnawave; сейчас стек заточен под Marzban.
+
+## 9. Chaos: панель выключена 5 минут
+
+Ожидаемое поведение бота:
+
+- polling и QR-оплата продолжают работать;
+- автовыдача пишет ошибку, заявка остаётся `pending_review`;
+- админ может вставить ссылку вручную или повторить confirm после подъёма панели.
+
+См. `docs/RUNBOOK.md`.
+
 ## Дальше
 
-Фаза 4+ в `docs/PRODUCT_ROADMAP.md`: напоминания об истечении, retry, метрики panel errors.
+`docs/PRODUCT_ROADMAP.md`, `docs/RELIABILITY.md`.

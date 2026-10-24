@@ -18,7 +18,8 @@
 6. UX: /help, FAQ, напоминания об истечении, антиспам;
 7. Админка: stats, поиск, CSV, рассылка, техработы, audit;
 8. Telegram Stars + QR fallback;
-9. pytest на статусы и e2e-флоу без Telegram.
+9. Надёжность: бэкапы, heartbeat, Sentry, runbook;
+10. pytest на статусы и e2e-флоу без Telegram.
 
 Дальше не «переписывать с нуля чужой магазин», а **дожать свой бот** и подключить панель выдачи.
 
@@ -193,16 +194,16 @@
 
 ### Фаза 8 — Надёжность «без сбоев»
 
-71. Postgres: миграции only forward; бэкап daily + restore drill раз в месяц.
-72. Отдельный watchdog: если polling умер — systemd/docker restart + алерт.
-73. Лимиты соединений/устройств на стороне панели (Remnawave HWID или политика нод).
-74. Мультинода: вторая нода + failover/баланс (когда >N юзеров).
-75. Нагрузочный прогон: 100 параллельных «создать заказ» / panel create.
-76. Chaos: выключить панель на 5 минут — бот должен деградировать предсказуемо.
-77. Sentry или аналог на exceptions бота.
-78. Runbook: «панель лежит», «Telegram 429», «диск полный», «утечка token».
-79. Полный `security-audit` (Cloudflare skill), findings закрыть.
-80. `parallel-code-review` на релизной ветке.
+71. ~~Postgres: only forward + `scripts/backup_postgres.sh` / restore + `docs/BACKUP.md`~~  
+72. ~~Docker `unless-stopped` + heartbeat file healthcheck + опц. admin ping~~  
+73. Лимиты устройств — ops/панель (`docs/MARZBAN.md` §8); HWID Remnawave — позже.  
+74. Мультинода — ops когда вырастем (`docs/MARZBAN.md` §8).  
+75. ~~Нагрузочный smoke: 100 параллельных `create_order`~~  
+76. ~~Chaos панели задокументирован + деградация уже в коде~~  
+77. ~~Опциональный Sentry (`SENTRY_DSN`) + JSON logs (`LOG_JSON`)~~  
+78. ~~`docs/RUNBOOK.md`~~  
+79. Полный `security-audit` — перед публичным запуском (скилл).  
+80. `parallel-code-review` — на релизной ветке перед merge в `main`.
 
 ### Фаза 9 — Деплой «осталось залить»
 

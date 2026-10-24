@@ -1,34 +1,31 @@
-# Деплой (фаза 1)
+# Деплой
 
-Минимум: Docker + Postgres. Бот по-прежнему с ручной оплатой по QR.
+Минимум: Docker + Postgres. Оплата: QR и опционально Telegram Stars.
 
-## Локально / один VPS
-
-1. Скопируй env:
+## Dev / один VPS (порты Postgres открыты)
 
 ```bash
 cp .env.example .env
-```
-
-2. Заполни минимум:
-
-- `BOT_TOKEN`
-- `ADMIN_IDS`
-- `PAYMENT_DETAILS`
-- `POSTGRES_PASSWORD` (сильный пароль)
-
-3. Подними стек:
-
-```bash
+# BOT_TOKEN, ADMIN_IDS, PAYMENT_DETAILS, POSTGRES_PASSWORD
 docker compose up -d --build
 docker compose logs -f bot
+docker compose ps
 ```
 
-Сервисы:
+Сервисы: `db`, `migrate` (один раз), `bot` (polling + healthcheck по heartbeat).
 
-- `db` — Postgres 16
-- `migrate` — `alembic upgrade head` + seed тарифов (один раз за старт)
-- `bot` — polling aiogram
+## Prod
+
+```bash
+cp .env.example .env
+# секреты только на сервере
+docker compose -f docker-compose.prod.yml up -d --build
+docker compose -f docker-compose.prod.yml ps
+./scripts/backup_postgres.sh ./backups
+```
+
+В prod Postgres **не** публикуется на хост. Логи JSON: `LOG_JSON=true`.  
+Опционально: `SENTRY_DSN=...`, `PANEL_ENABLED=true`, `STARS_ENABLED=true`.
 
 ## Без Docker (SQLite)
 
@@ -49,6 +46,8 @@ alembic upgrade head
 python -m bot.seed
 ```
 
+Только forward. Откат — через restore дампа (`docs/BACKUP.md`).
+
 ## Проверка
 
 ```bash
@@ -57,4 +56,4 @@ ruff check bot tests alembic
 python -m pytest -q
 ```
 
-Дальше: поставьте Marzban по `docs/MARZBAN.md`, включите `PANEL_ENABLED=true` и проверьте выдачу из `/admin`.
+Панель: `docs/MARZBAN.md`. Инциденты: `docs/RUNBOOK.md`. Надёжность: `docs/RELIABILITY.md`.
