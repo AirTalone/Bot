@@ -16,20 +16,35 @@
 
 Нужен Python 3.11+.
 
+### Docker + Postgres (рекомендуется)
+
+```bash
+cp .env.example .env
+# заполните BOT_TOKEN, ADMIN_IDS, PAYMENT_DETAILS, POSTGRES_PASSWORD
+docker compose up -d --build
+docker compose logs -f bot
+```
+
+Подробнее: [`docs/DEPLOY.md`](docs/DEPLOY.md).
+
+### Локально на SQLite
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
+# DATABASE_URL=sqlite+aiosqlite:///data/bot.db
 python -m bot
 ```
 
 В `.env` укажите токен бота и Telegram id администраторов через запятую. Каждый администратор должен один раз открыть бота и нажать `/start`: иначе Telegram не даст прислать ему заявку. Сами заявки всё равно копятся в `/admin`.
 
-Проверка логики заказов:
+Проверка:
 
 ```bash
 pip install -r requirements-dev.txt
+ruff check bot tests alembic
 python -m pytest
 ```
 

@@ -117,14 +117,14 @@
 
 ### Фаза 1 — Инженерный фундамент репо
 
-11. Оставить скиллы из `.agents/skills/` (уже установлено) и читать `docs/SKILLS_HOWTO.md`.
-12. Перевести зависимости на `uv`/`pyproject.toml` (скилл `modern-python` / `code-quality`) — опционально, но желательно.
-13. Добавить Ruff + pre-commit (gitleaks на секреты).
-14. Ввести Alembic (`alembic-migrations`).
-15. Мигрировать с SQLite → Postgres в docker-compose (прод-профиль).
-16. Вынести settings через уже существующий pydantic-settings; добавить `PANEL_*` переменные.
-17. Настроить GitHub Actions (`setting-up-ci`): pytest + ruff на PR.
-18. Добавить Dockerfile + compose (`adding-docker`): `bot`, `db`, `migrate`.
+11. ~~Оставить скиллы из `.agents/skills/`~~ — сделано.
+12. Перевести зависимости на `uv`/`pyproject.toml` — опционально, позже.
+13. ~~Ruff в CI~~ — сделано (`ruff.toml` + workflow). Pre-commit/gitleaks — следующий мини-шаг.
+14. ~~Alembic~~ — сделано (`alembic/versions/20261024_0001_initial_schema.py`).
+15. ~~Postgres в docker-compose~~ — сделано (`db` + `migrate` + `bot`).
+16. Settings: `DATABASE_URL` / `AUTO_CREATE_SQLITE` готовы; `PANEL_*` — в фазе 3.
+17. ~~GitHub Actions~~ — сделано (`.github/workflows/ci.yml`: ruff, pytest, docker build).
+18. ~~Dockerfile + compose~~ — сделано; см. `docs/DEPLOY.md`.
 19. Health endpoint или периодический self-ping админам «бот жив».
 20. Структурированные логи (JSON) + request/update id.
 

@@ -9,7 +9,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, BotCommandScopeChat, ErrorEvent
 
 from bot.config import Settings, get_settings
-from bot.db import create_engine, create_session_factory, ensure_sqlite_parent, init_db
+from bot.db import create_engine, create_session_factory, ensure_sqlite_parent, prepare_runtime_db
 from bot.handlers import admin_router, user_router
 from bot.middlewares import DbSessionMiddleware
 
@@ -39,13 +39,19 @@ async def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     settings = get_settings()
+    token = settings.require_bot_token()
     if not settings.admin_id_list:
         logger.warning("ADMIN_IDS is empty; payment claims will stay in /admin without a push")
 
     ensure_sqlite_parent(settings.database_url)
     engine = create_engine(settings.database_url)
     session_factory = create_session_factory(engine)
-    await init_db(engine, session_factory)
+    await prepare_runtime_db(
+        engine,
+        session_factory,
+        database_url=settings.database_url,
+        auto_create_sqlite=settings.auto_create_sqlite,
+    )
 
     dispatcher = Dispatcher(storage=MemoryStorage(), settings=settings)
     dispatcher.update.middleware(DbSessionMiddleware(session_factory))
@@ -58,7 +64,7 @@ async def main() -> None:
 
     try:
         async with Bot(
-            token=settings.bot_token,
+            token=token,
             default=DefaultBotProperties(parse_mode=ParseMode.HTML),
         ) as bot:
             await setup_commands(bot, settings)

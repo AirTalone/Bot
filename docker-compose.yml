@@ -1,0 +1,44 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: vpnbot
+      POSTGRES_USER: vpnbot
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vpnbot}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vpnbot -d vpnbot"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+
+  migrate:
+    build: .
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://vpnbot:${POSTGRES_PASSWORD:-vpnbot}@db:5432/vpnbot
+      BOT_TOKEN: ${BOT_TOKEN:-migrate-placeholder}
+    command: ["sh", "-c", "alembic upgrade head && python -m bot.seed"]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  bot:
+    build: .
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://vpnbot:${POSTGRES_PASSWORD:-vpnbot}@db:5432/vpnbot
+      AUTO_CREATE_SQLITE: "false"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  pgdata:
