@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -24,6 +25,8 @@ class MarzbanClient:
         inbounds: dict[str, list[str]] | None = None,
         timeout: float = 20.0,
         transport: httpx.AsyncBaseTransport | None = None,
+        max_retries: int = 3,
+        retry_backoff_seconds: float = 0.4,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._username = username
@@ -31,6 +34,8 @@ class MarzbanClient:
         self._proxies = proxies if proxies is not None else {"vless": {}}
         self._inbounds = inbounds if inbounds is not None else {}
         self._token: str | None = None
+        self._max_retries = max(1, max_retries)
+        self._retry_backoff_seconds = retry_backoff_seconds
         self._client = httpx.AsyncClient(
             base_url=self._base_url,
             timeout=timeout,
@@ -79,10 +84,18 @@ class MarzbanClient:
         )
         return self._to_access(data, created=False)
 
+    async def fetch_subscription(self, *, username: str) -> ProvisionedAccess:
+        await self._ensure_token()
+        data = await self._get_user(username)
+        if data is None:
+            raise PanelError(f"marzban user not found: {username}")
+        return self._to_access(data, created=False)
+
     async def _ensure_token(self) -> None:
         if self._token:
             return
-        response = await self._client.post(
+        response = await self._send(
+            "POST",
             "/api/admin/token",
             data={"username": self._username, "password": self._password, "grant_type": "password"},
             headers={"Content-Type": "application/x-www-form-urlencoded"},
@@ -95,7 +108,8 @@ class MarzbanClient:
         self._token = str(token)
 
     async def _get_user(self, username: str) -> dict[str, Any] | None:
-        response = await self._client.get(
+        response = await self._send(
+            "GET",
             f"/api/user/{username}",
             headers=self._auth_headers(),
         )
@@ -106,17 +120,59 @@ class MarzbanClient:
         return response.json()
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
-        response = await self._client.request(method, path, headers=self._auth_headers(), **kwargs)
+        response = await self._send(method, path, headers=self._auth_headers(), **kwargs)
         if response.status_code == 401:
             self._token = None
             await self._ensure_token()
-            response = await self._client.request(method, path, headers=self._auth_headers(), **kwargs)
+            response = await self._send(method, path, headers=self._auth_headers(), **kwargs)
         if response.status_code >= 400:
             raise PanelError(f"marzban {method} {path} failed: HTTP {response.status_code}: {response.text[:300]}")
         data = response.json()
         if not isinstance(data, dict):
             raise PanelError("marzban returned unexpected payload")
         return data
+
+    async def _send(
+        self,
+        method: str,
+        path: str,
+        *,
+        headers: dict[str, str] | None = None,
+        **kwargs: Any,
+    ) -> httpx.Response:
+        last_error: Exception | None = None
+        for attempt in range(self._max_retries):
+            try:
+                response = await self._client.request(method, path, headers=headers, **kwargs)
+            except httpx.HTTPError as exc:
+                last_error = exc
+                logger.warning(
+                    "marzban %s %s transport error attempt %s/%s: %s",
+                    method,
+                    path,
+                    attempt + 1,
+                    self._max_retries,
+                    exc,
+                )
+            else:
+                if response.status_code < 500 or response.status_code == 404:
+                    return response
+                last_error = PanelError(
+                    f"marzban {method} {path} failed: HTTP {response.status_code}: {response.text[:300]}"
+                )
+                logger.warning(
+                    "marzban %s %s HTTP %s attempt %s/%s",
+                    method,
+                    path,
+                    response.status_code,
+                    attempt + 1,
+                    self._max_retries,
+                )
+            if attempt + 1 < self._max_retries:
+                await asyncio.sleep(self._retry_backoff_seconds * (2**attempt))
+        if isinstance(last_error, PanelError):
+            raise last_error
+        raise PanelError(f"marzban {method} {path} failed after retries: {last_error}")
 
     def _auth_headers(self) -> dict[str, str]:
         if not self._token:

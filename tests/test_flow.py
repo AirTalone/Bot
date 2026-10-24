@@ -113,6 +113,8 @@ async def test_qr_payment_flow(session_factory: async_sessionmaker[AsyncSession]
         payment_details="СБП +7 900 000-00-00",
         payment_qr_payload="",
         support_contact="@support",
+        order_cooldown_seconds=0,
+        paid_cooldown_seconds=0,
     )
     dispatcher = Dispatcher(storage=MemoryStorage(), settings=settings)
     dispatcher.update.middleware(DbSessionMiddleware(session_factory))

@@ -69,6 +69,71 @@ async def test_marzban_creates_user(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_marzban_retries_on_500() -> None:
+    attempts = {"n": 0}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/admin/token":
+            return httpx.Response(200, json={"access_token": "tok"})
+        if request.method == "GET":
+            return httpx.Response(404, json={"detail": "missing"})
+        if request.method == "POST" and request.url.path == "/api/user":
+            attempts["n"] += 1
+            if attempts["n"] < 3:
+                return httpx.Response(503, text="busy")
+            return httpx.Response(
+                200,
+                json={
+                    "username": "tg1",
+                    "subscription_url": "https://panel.test/sub/ok",
+                    "expire": int((datetime.now(UTC) + timedelta(days=30)).timestamp()),
+                },
+            )
+        return httpx.Response(500, text="unexpected")
+
+    client = MarzbanClient(
+        base_url="https://panel.test",
+        username="admin",
+        password="secret",
+        transport=httpx.MockTransport(handler),
+        max_retries=3,
+        retry_backoff_seconds=0.01,
+    )
+    access = await client.ensure_subscription(username="tg1", duration_days=30)
+    await client.aclose()
+    assert attempts["n"] == 3
+    assert access.subscription_url.endswith("/sub/ok")
+
+
+@pytest.mark.asyncio
+async def test_marzban_fetch_subscription() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/admin/token":
+            return httpx.Response(200, json={"access_token": "tok"})
+        if request.method == "GET" and request.url.path == "/api/user/tg9":
+            return httpx.Response(
+                200,
+                json={
+                    "username": "tg9",
+                    "subscription_url": "https://panel.test/sub/fresh",
+                    "expire": int((datetime.now(UTC) + timedelta(days=7)).timestamp()),
+                },
+            )
+        return httpx.Response(500, text="unexpected")
+
+    client = MarzbanClient(
+        base_url="https://panel.test",
+        username="admin",
+        password="secret",
+        transport=httpx.MockTransport(handler),
+    )
+    access = await client.fetch_subscription(username="tg9")
+    await client.aclose()
+    assert access.subscription_url == "https://panel.test/sub/fresh"
+    assert access.created is False
+
+
+@pytest.mark.asyncio
 async def test_marzban_extends_existing_user() -> None:
     current_expire = int((datetime.now(UTC) + timedelta(days=5)).timestamp())
 

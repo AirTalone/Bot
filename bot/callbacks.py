@@ -14,6 +14,11 @@ class MenuAction(CallbackData, prefix="menu"):
     action: str
 
 
+class OrderAction(CallbackData, prefix="uorder"):
+    order_id: int
+    action: str
+
+
 class AdminMenuAction(CallbackData, prefix="amenu"):
     action: str
 

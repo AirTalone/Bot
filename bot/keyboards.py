@@ -5,9 +5,10 @@ from bot.callbacks import (
     AdminOrderAction,
     CheckoutAction,
     MenuAction,
+    OrderAction,
     TariffSelect,
 )
-from bot.models import Order, Tariff
+from bot.models import Order, OrderStatus, Tariff
 from bot.services.payments import format_money
 
 
@@ -21,16 +22,83 @@ def tariffs_keyboard(tariffs: list[Tariff]) -> InlineKeyboardMarkup:
         ]
         for tariff in tariffs
     ]
-    rows.append([InlineKeyboardButton(text="Мои заказы", callback_data=MenuAction(action="orders").pack())])
+    rows.append(
+        [
+            InlineKeyboardButton(text="Мои заказы", callback_data=MenuAction(action="orders").pack()),
+            InlineKeyboardButton(text="Инструкция", callback_data=MenuAction(action="help").pack()),
+        ]
+    )
+    rows.append([InlineKeyboardButton(text="FAQ", callback_data=MenuAction(action="faq").pack())])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def orders_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="К тарифам", callback_data=MenuAction(action="tariffs").pack())]
+def orders_keyboard(orders: list[Order] | None = None, *, panel_enabled: bool = False) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for order in orders or []:
+        if order.status != OrderStatus.fulfilled:
+            continue
+        if panel_enabled and order.panel_username and order.access_link:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=f"Обновить ссылку {order.payment_code}",
+                        callback_data=OrderAction(order_id=order.id, action="refresh").pack(),
+                    )
+                ]
+            )
+    rows.append(
+        [
+            InlineKeyboardButton(text="К тарифам", callback_data=MenuAction(action="tariffs").pack()),
+            InlineKeyboardButton(text="Продлить", callback_data=MenuAction(action="renew").pack()),
         ]
     )
+    rows.append([InlineKeyboardButton(text="Инструкция", callback_data=MenuAction(action="help").pack())])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def help_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="К тарифам", callback_data=MenuAction(action="tariffs").pack()),
+                InlineKeyboardButton(text="FAQ", callback_data=MenuAction(action="faq").pack()),
+            ]
+        ]
+    )
+
+
+def faq_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="К тарифам", callback_data=MenuAction(action="tariffs").pack()),
+                InlineKeyboardButton(text="Инструкция", callback_data=MenuAction(action="help").pack()),
+            ]
+        ]
+    )
+
+
+def access_granted_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Инструкция", callback_data=MenuAction(action="help").pack()),
+                InlineKeyboardButton(text="Мои заказы", callback_data=MenuAction(action="orders").pack()),
+            ]
+        ]
+    )
+
+
+def reminder_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Продлить", callback_data=MenuAction(action="renew").pack())]
+        ]
+    )
+
+
+def expired_keyboard() -> InlineKeyboardMarkup:
+    return reminder_keyboard()
 
 
 def checkout_keyboard(order_id: int) -> InlineKeyboardMarkup:
