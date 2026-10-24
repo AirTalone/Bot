@@ -26,3 +26,12 @@ class AdminMenuAction(CallbackData, prefix="amenu"):
 class AdminOrderAction(CallbackData, prefix="aorder"):
     order_id: int
     action: str
+
+
+class AdminUserAction(CallbackData, prefix="auser"):
+    order_id: int
+    action: str
+
+
+class AdminBroadcastAction(CallbackData, prefix="abcast"):
+    action: str

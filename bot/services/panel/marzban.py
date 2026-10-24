@@ -91,6 +91,13 @@ class MarzbanClient:
             raise PanelError(f"marzban user not found: {username}")
         return self._to_access(data, created=False)
 
+    async def disable_user(self, *, username: str) -> None:
+        await self._ensure_token()
+        existing = await self._get_user(username)
+        if existing is None:
+            raise PanelError(f"marzban user not found: {username}")
+        await self._request("PUT", f"/api/user/{username}", json={"status": "disabled"})
+
     async def _ensure_token(self) -> None:
         if self._token:
             return

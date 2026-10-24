@@ -1,8 +1,10 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from bot.callbacks import (
+    AdminBroadcastAction,
     AdminMenuAction,
     AdminOrderAction,
+    AdminUserAction,
     CheckoutAction,
     MenuAction,
     OrderAction,
@@ -120,7 +122,8 @@ def checkout_keyboard(order_id: int) -> InlineKeyboardMarkup:
     )
 
 
-def admin_home_keyboard() -> InlineKeyboardMarkup:
+def admin_home_keyboard(*, maintenance: bool = False) -> InlineKeyboardMarkup:
+    maint_label = "Выключить техработы" if maintenance else "Включить техработы"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -128,6 +131,76 @@ def admin_home_keyboard() -> InlineKeyboardMarkup:
                     text="Заявки на проверке",
                     callback_data=AdminMenuAction(action="queue").pack(),
                 )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Обновить статистику",
+                    callback_data=AdminMenuAction(action="home").pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Поиск",
+                    callback_data=AdminMenuAction(action="search").pack(),
+                ),
+                InlineKeyboardButton(
+                    text="Рассылка",
+                    callback_data=AdminMenuAction(action="broadcast").pack(),
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Экспорт CSV",
+                    callback_data=AdminMenuAction(action="export").pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=maint_label,
+                    callback_data=AdminMenuAction(action="maint").pack(),
+                )
+            ],
+        ]
+    )
+
+
+def search_results_keyboard(orders: list[Order], *, panel_enabled: bool) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for order in orders:
+        if order.status == OrderStatus.pending_review:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=f"Открыть {order.payment_code}",
+                        callback_data=AdminOrderAction(order_id=order.id, action="open").pack(),
+                    )
+                ]
+            )
+        if panel_enabled and order.panel_username:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=f"Отключить в панели {order.payment_code}",
+                        callback_data=AdminUserAction(order_id=order.id, action="ban").pack(),
+                    )
+                ]
+            )
+    rows.append([InlineKeyboardButton(text="В админку", callback_data=AdminMenuAction(action="home").pack())])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def broadcast_confirm_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Отправить",
+                    callback_data=AdminBroadcastAction(action="send").pack(),
+                ),
+                InlineKeyboardButton(
+                    text="Отмена",
+                    callback_data=AdminBroadcastAction(action="cancel").pack(),
+                ),
             ]
         ]
     )
@@ -144,7 +217,10 @@ def pending_list_keyboard(orders: list[Order]) -> InlineKeyboardMarkup:
         for order in orders
     ]
     rows.append(
-        [InlineKeyboardButton(text="Обновить", callback_data=AdminMenuAction(action="queue").pack())]
+        [
+            InlineKeyboardButton(text="Обновить", callback_data=AdminMenuAction(action="queue").pack()),
+            InlineKeyboardButton(text="В админку", callback_data=AdminMenuAction(action="home").pack()),
+        ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 

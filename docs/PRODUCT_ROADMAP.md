@@ -16,7 +16,8 @@
 4. подтверждение в `/admin`;
 5. ручная вставка ссылки доступа + автовыдача Marzban (`PANEL_ENABLED`);
 6. UX: /help, FAQ, напоминания об истечении, антиспам;
-7. pytest на статусы и e2e-флоу без Telegram.
+7. Админка: stats, поиск, CSV, рассылка, техработы, audit;
+8. pytest на статусы и e2e-флоу без Telegram.
 
 Дальше не «переписывать с нуля чужой магазин», а **дожать свой бот** и подключить панель выдачи.
 
@@ -171,13 +172,13 @@
 
 ### Фаза 6 — Админка оператора
 
-57. `/admin` stats: новые, pending, paid/day, active subs, panel errors.
-58. Поиск пользователя по telegram id / payment code.
-59. Ручной ban / disable в панели.
-60. Broadcast (с rate limit Telegram).
-61. Экспорт CSV заказов за период.
-62. Аудит-лог админ-действий в БД.
-63. Режим техработ: бот отвечает «техработы», покупки выключены.
+57. ~~`/admin` stats: новые, pending, paid/day, active subs, panel errors~~  
+58. ~~Поиск по telegram id / payment code / @username~~  
+59. ~~Disable пользователя в Marzban из поиска~~  
+60. ~~Broadcast с `BROADCAST_DELAY_SECONDS` + RetryAfter~~  
+61. ~~Экспорт CSV (`EXPORT_DAYS`)~~  
+62. ~~`admin_audit_logs`~~  
+63. ~~Режим техработ (`runtime_state.maintenance`)~~
 
 ### Фаза 7 — Платежи v2 (когда ручной QR надоест)
 

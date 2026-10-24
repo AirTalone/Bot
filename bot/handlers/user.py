@@ -19,6 +19,7 @@ from bot.keyboards import (
 )
 from bot.models import User
 from bot.notifications import notify_admins
+from bot.services.admin_ops import is_maintenance
 from bot.services.cooldowns import CLAIM_PAID, ORDER_CREATE, gate
 from bot.services.orders import (
     cancel_awaiting,
@@ -39,6 +40,7 @@ from bot.texts import (
     cooldown_text,
     faq_text,
     help_text,
+    maintenance_user_text,
     orders_text,
     payment_caption,
     refreshed_link_text,
@@ -63,10 +65,14 @@ async def bind_user(tg_user: TelegramUser, session: AsyncSession) -> User:
 
 
 async def show_tariffs(message: Message, session: AsyncSession, settings: Settings, *, edit: bool) -> None:
-    tariffs = await list_active_tariffs(session)
     is_admin = message.chat.id in settings.admin_id_list
-    text = tariffs_text(tariffs, support_contact=settings.support_contact, is_admin=is_admin)
-    markup = tariffs_keyboard(tariffs) if tariffs else None
+    if await is_maintenance(session) and not is_admin:
+        text = maintenance_user_text(support_contact=settings.support_contact)
+        markup = None
+    else:
+        tariffs = await list_active_tariffs(session)
+        text = tariffs_text(tariffs, support_contact=settings.support_contact, is_admin=is_admin)
+        markup = tariffs_keyboard(tariffs) if tariffs else None
     if edit:
         try:
             await message.edit_text(text, reply_markup=markup)
@@ -260,6 +266,9 @@ async def choose_tariff(
 ) -> None:
     if callback.from_user is None or not isinstance(callback.message, Message):
         await callback.answer()
+        return
+    if await is_maintenance(session) and callback.from_user.id not in settings.admin_id_list:
+        await callback.answer("Технические работы", show_alert=True)
         return
     hit = gate.check(ORDER_CREATE, callback.from_user.id, settings.order_cooldown_seconds)
     if hit is not None:
