@@ -17,7 +17,7 @@ import re
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart
-from aiogram.types import BufferedInputFile, Message
+from aiogram.types import BufferedInputFile, Message, MessageEntity
 from dotenv import load_dotenv
 
 from qr_generator import generate_sbp_qr, is_plausible_url, normalize_url
@@ -30,7 +30,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Вытаскиваем первую http(s)-ссылку из сообщения (удобно, если прислали текст + URL)
 URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 
 HELP_TEXT = (
@@ -38,14 +37,33 @@ HELP_TEXT = (
     "Примеры:\n"
     "• https://qr.nspk.ru/AD10...\n"
     "• любая другая https-ссылка\n\n"
+    "QR приходит файлом PNG без сжатия Telegram — так банк его нормально читает.\n\n"
     "Команды:\n"
     "/start — приветствие\n"
     "/help — эта подсказка"
 )
 
 
-def extract_url(text: str) -> str | None:
-    text = (text or "").strip()
+def _entity_text(text: str, entity: MessageEntity) -> str:
+    # Telegram offsets are in UTF-16 code units
+    encoded = text.encode("utf-16-le")
+    start = entity.offset * 2
+    end = (entity.offset + entity.length) * 2
+    return encoded[start:end].decode("utf-16-le")
+
+
+def extract_url(message: Message) -> str | None:
+    """Достаёт URL из entities (надёжнее, чем regex по тексту)."""
+    text = message.text or message.caption or ""
+    entities = message.entities or message.caption_entities or []
+
+    for entity in entities:
+        if entity.type == "url":
+            return _entity_text(text, entity).rstrip(").,;]")
+        if entity.type == "text_link" and entity.url:
+            return entity.url.strip()
+
+    text = text.strip()
     if not text:
         return None
     match = URL_RE.search(text)
@@ -67,13 +85,15 @@ async def cmd_help(message: Message) -> None:
 
 
 async def handle_text(message: Message) -> None:
-    url = extract_url(message.text or "")
+    url = extract_url(message)
     if not url:
         await message.answer(
             "Не вижу ссылку. Пришлите URL, например:\n"
             "https://qr.nspk.ru/AD101055EDK5J0E099CQ1IGD7IAVBQK0"
         )
         return
+
+    logger.info("QR request from chat=%s url=%s", message.chat.id, url)
 
     try:
         png = await asyncio.to_thread(generate_sbp_qr, url)
@@ -82,10 +102,13 @@ async def handle_text(message: Message) -> None:
         await message.answer("Не удалось сгенерировать QR. Попробуйте другую ссылку.")
         return
 
-    photo = BufferedInputFile(png, filename="qr.png")
-    await message.answer_photo(
-        photo=photo,
-        caption=f"QR готов\n{url}",
+    # Важно: sendDocument + disable_content_type_detection —
+    # иначе Telegram жмёт картинку как фото и банк не читает QR.
+    document = BufferedInputFile(png, filename="sbp-qr.png")
+    await message.answer_document(
+        document=document,
+        caption=f"QR готов (PNG без сжатия)\n{url}",
+        disable_content_type_detection=True,
     )
 
 

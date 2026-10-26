@@ -38,9 +38,17 @@ class QrGeneratorTests(unittest.TestCase):
         self.assertNotEqual(corner, (255, 255, 255))
 
         # Среди пикселей должен встречаться фирменный фиолетовый СБП
-        pixels = img.getdata()
+        pixels = list(img.getdata())
         self.assertIn(SBP_PURPLE, pixels)
         self.assertIn((255, 255, 255), pixels)
+
+        # QR должен декодироваться обратно в исходный URL
+        import cv2
+        import numpy as np
+
+        arr = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+        decoded, _, _ = cv2.QRCodeDetector().detectAndDecode(arr)
+        self.assertEqual(decoded, SAMPLE)
 
 
 if __name__ == "__main__":
