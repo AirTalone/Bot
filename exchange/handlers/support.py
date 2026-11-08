@@ -5,7 +5,7 @@ import logging
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import BufferedInputFile, CallbackQuery, Message
+from aiogram.types import CallbackQuery, Message
 
 from exchange.config import Settings
 from exchange.db import Database
@@ -14,7 +14,6 @@ from exchange.models import Requisites
 from exchange.services import OrderError, OrderService
 from exchange.states import SupportAssignRequisites, SupportNote
 from exchange.statuses import SUPPORT_QUEUES
-from qr_generator import generate_sbp_qr, is_plausible_url, normalize_url
 
 logger = logging.getLogger(__name__)
 router = Router(name="support")
@@ -79,7 +78,7 @@ async def support_req_start(
     await callback.message.answer(  # type: ignore[union-attr]
         f"Выдача реквизитов для <b>{order.public_id}</b> "
         f"({order.amount_rub:.2f} ₽).\n"
-        f"1/4 — название банка (как на площадке):",
+        f"1/3 — название банка (как на площадке):",
         parse_mode="HTML",
     )
     await callback.answer()
@@ -89,29 +88,17 @@ async def support_req_start(
 async def support_req_bank(message: Message, state: FSMContext) -> None:
     await state.update_data(bank=(message.text or "").strip())
     await state.set_state(SupportAssignRequisites.detail)
-    await message.answer("2/4 — реквизиты (телефон СБП / карта / счёт):")
+    await message.answer("2/3 — реквизиты (телефон / карта / счёт):")
 
 
 @router.message(SupportAssignRequisites.detail)
 async def support_req_detail(message: Message, state: FSMContext) -> None:
     await state.update_data(detail=(message.text or "").strip())
     await state.set_state(SupportAssignRequisites.holder)
-    await message.answer("3/4 — ФИО / получатель (или «-» если нет):")
+    await message.answer("3/3 — ФИО / получатель (или «-» если нет):")
 
 
 @router.message(SupportAssignRequisites.holder)
-async def support_req_holder(message: Message, state: FSMContext) -> None:
-    holder = (message.text or "").strip()
-    if holder == "-":
-        holder = ""
-    await state.update_data(holder=holder)
-    await state.set_state(SupportAssignRequisites.sbp_url)
-    await message.answer(
-        "4/4 — ссылка СБП (https://qr.nspk.ru/...) или «-» если нет:"
-    )
-
-
-@router.message(SupportAssignRequisites.sbp_url)
 async def support_req_finish(
     message: Message,
     state: FSMContext,
@@ -123,14 +110,10 @@ async def support_req_finish(
     if message.from_user is None or not _require_support(settings, message.from_user.id):
         await state.clear()
         return
-    raw_url = (message.text or "").strip()
-    sbp_url = ""
-    if raw_url != "-":
-        if is_plausible_url(raw_url):
-            sbp_url = normalize_url(raw_url)
-        else:
-            await message.answer("Это не похоже на ссылку. Пришлите URL или «-».")
-            return
+
+    holder = (message.text or "").strip()
+    if holder == "-":
+        holder = ""
 
     data = await state.get_data()
     order = await db.get_order_by_id(int(data["req_order_id"]))
@@ -142,8 +125,8 @@ async def support_req_finish(
     requisites = Requisites(
         bank=str(data.get("bank") or ""),
         detail=str(data.get("detail") or ""),
-        holder=str(data.get("holder") or ""),
-        sbp_url=sbp_url,
+        holder=holder,
+        sbp_url="",
     )
     try:
         order = await orders.assign_requisites(
@@ -183,15 +166,6 @@ async def support_req_finish(
             parse_mode="HTML",
             reply_markup=client_order_kb(order),
         )
-        if order.requisites_sbp_url:
-            png = generate_sbp_qr(order.requisites_sbp_url)
-            await bot.send_document(
-                order.client_tg_id,
-                document=BufferedInputFile(png, filename="sbp-qr.png"),
-                caption=order.requisites_sbp_url,
-                disable_content_type_detection=True,
-                reply_markup=client_order_kb(order),
-            )
     except Exception:
         logger.exception("Failed to notify client %s", order.client_tg_id)
 

@@ -1,6 +1,6 @@
 from aiogram import Dispatcher
 
-from exchange.handlers import admin, client, common, qr_tool, support
+from exchange.handlers import admin, client, common, support
 
 
 def setup_routers(dp: Dispatcher) -> None:
@@ -8,4 +8,3 @@ def setup_routers(dp: Dispatcher) -> None:
     dp.include_router(client.router)
     dp.include_router(support.router)
     dp.include_router(admin.router)
-    dp.include_router(qr_tool.router)

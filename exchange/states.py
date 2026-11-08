@@ -14,7 +14,6 @@ class SupportAssignRequisites(StatesGroup):
     bank = State()
     detail = State()
     holder = State()
-    sbp_url = State()
 
 
 class SupportNote(StatesGroup):
