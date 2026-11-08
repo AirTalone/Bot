@@ -1,0 +1,304 @@
+from __future__ import annotations
+
+import logging
+
+from aiogram import Bot, F, Router
+from aiogram.filters import Command, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.types import CallbackQuery, Message
+
+from exchange.config import Settings
+from exchange.db import Database
+from exchange.keyboards import client_main_kb, client_order_kb
+from exchange.services import OrderError, OrderService
+from exchange.states import ClientCreateOrder, ClientUploadReceipt
+from exchange.statuses import OrderStatus
+
+logger = logging.getLogger(__name__)
+router = Router(name="client")
+
+
+def _parse_amount(text: str) -> float | None:
+    cleaned = text.strip().replace(" ", "").replace("\u00a0", "").replace(",", ".")
+    cleaned = cleaned.replace("₽", "").replace("rub", "").replace("RUB", "")
+    try:
+        value = float(cleaned)
+    except ValueError:
+        return None
+    if value <= 0:
+        return None
+    return value
+
+
+@router.message(Command("exchange"))
+@router.message(F.text == "Обменять RUB → USDT")
+async def start_exchange(message: Message, state: FSMContext, settings: Settings) -> None:
+    await state.set_state(ClientCreateOrder.amount)
+    await message.answer(
+        f"Введите сумму в рублях.\n"
+        f"Лимит: {settings.min_amount_rub:.0f}–{settings.max_amount_rub:.0f} ₽\n"
+        f"Курс сейчас: <b>{settings.effective_rate():.4f}</b> ₽/USDT\n\n"
+        f"Или /cancel чтобы отменить ввод.",
+        parse_mode="HTML",
+    )
+
+
+@router.message(Command("cancel"), StateFilter(ClientCreateOrder, ClientUploadReceipt))
+async def cancel_fsm(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer("Ввод отменён.", reply_markup=client_main_kb())
+
+
+@router.message(ClientCreateOrder.amount)
+async def process_amount(
+    message: Message, state: FSMContext, settings: Settings
+) -> None:
+    amount = _parse_amount(message.text or "")
+    if amount is None:
+        await message.answer("Нужна сумма числом, например: 15000")
+        return
+    if amount < settings.min_amount_rub or amount > settings.max_amount_rub:
+        await message.answer(
+            f"Сумма вне лимита {settings.min_amount_rub:.0f}–{settings.max_amount_rub:.0f} ₽"
+        )
+        return
+    usdt = settings.rub_to_usdt(amount)
+    await state.update_data(amount_rub=amount)
+    await state.set_state(ClientCreateOrder.address)
+    await message.answer(
+        f"Сумма: <b>{amount:.2f} ₽</b> ≈ <b>{usdt:.4f} USDT</b>\n"
+        f"Пришлите адрес USDT (TRC-20 / как принимаете).",
+        parse_mode="HTML",
+    )
+
+
+@router.message(ClientCreateOrder.address)
+async def process_address(
+    message: Message,
+    state: FSMContext,
+    orders: OrderService,
+    settings: Settings,
+    bot: Bot,
+) -> None:
+    address = (message.text or "").strip()
+    data = await state.get_data()
+    amount = float(data["amount_rub"])
+    user = message.from_user
+    if user is None:
+        await message.answer("Не удалось определить пользователя.")
+        return
+    try:
+        order = await orders.create_order(
+            client_tg_id=user.id,
+            client_username=user.username,
+            amount_rub=amount,
+            usdt_address=address,
+        )
+    except OrderError as exc:
+        await message.answer(str(exc))
+        return
+
+    await state.clear()
+    await message.answer(
+        "Заявка создана.\n\n"
+        + order.short_card()
+        + "\n\nСаппорт подберёт реквизиты под ваш запрос. Обычно это занимает несколько минут.",
+        parse_mode="HTML",
+        reply_markup=client_order_kb(order),
+    )
+    await _notify_staff_new_order(bot, settings, order.short_card())
+
+
+async def _notify_staff_new_order(bot: Bot, settings: Settings, text: str) -> None:
+    targets = set(settings.support_ids) | set(settings.admin_ids)
+    for tg_id in targets:
+        try:
+            await bot.send_message(
+                tg_id,
+                "🆕 Новая заявка — нужны реквизиты\n\n" + text,
+                parse_mode="HTML",
+            )
+        except Exception:
+            logger.exception("Failed to notify staff %s", tg_id)
+
+
+@router.message(Command("orders"))
+@router.message(F.text == "Мои заявки")
+async def my_orders(message: Message, db: Database) -> None:
+    if message.from_user is None:
+        return
+    items = await db.list_client_orders(message.from_user.id, limit=5)
+    if not items:
+        await message.answer("Заявок пока нет. Нажмите «Обменять RUB → USDT».")
+        return
+    for order in items:
+        await message.answer(
+            order.short_card(),
+            parse_mode="HTML",
+            reply_markup=client_order_kb(order),
+        )
+
+
+@router.callback_query(F.data.startswith("client:status:"))
+async def client_status(callback: CallbackQuery, db: Database) -> None:
+    order_id = int(callback.data.split(":")[-1])  # type: ignore[union-attr]
+    order = await db.get_order_by_id(order_id)
+    if order is None or callback.from_user.id != order.client_tg_id:
+        await callback.answer("Заявка не найдена", show_alert=True)
+        return
+    await callback.message.answer(  # type: ignore[union-attr]
+        order.short_card(),
+        parse_mode="HTML",
+        reply_markup=client_order_kb(order),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("client:cancel:"))
+async def client_cancel(
+    callback: CallbackQuery, orders: OrderService, db: Database
+) -> None:
+    order_id = int(callback.data.split(":")[-1])  # type: ignore[union-attr]
+    order = await db.get_order_by_id(order_id)
+    if order is None or callback.from_user.id != order.client_tg_id:
+        await callback.answer("Заявка не найдена", show_alert=True)
+        return
+    try:
+        order = await orders.cancel(
+            order, reason="Отменена клиентом", by_tg_id=callback.from_user.id
+        )
+    except OrderError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await callback.message.answer(  # type: ignore[union-attr]
+        "Заявка отменена.\n\n" + order.short_card(),
+        parse_mode="HTML",
+    )
+    await callback.answer("Отменено")
+
+
+@router.callback_query(F.data.startswith("client:upload:"))
+async def client_upload_start(
+    callback: CallbackQuery, state: FSMContext, db: Database
+) -> None:
+    order_id = int(callback.data.split(":")[-1])  # type: ignore[union-attr]
+    order = await db.get_order_by_id(order_id)
+    if order is None or callback.from_user.id != order.client_tg_id:
+        await callback.answer("Заявка не найдена", show_alert=True)
+        return
+    if order.status not in {
+        OrderStatus.AWAITING_PAYMENT,
+        OrderStatus.RECEIPT_REJECTED,
+    }:
+        await callback.answer("Сейчас чек загрузить нельзя", show_alert=True)
+        return
+    await state.set_state(ClientUploadReceipt.waiting_file)
+    await state.update_data(upload_order_id=order.id)
+    await callback.message.answer(  # type: ignore[union-attr]
+        f"Пришлите чек по заявке <b>{order.public_id}</b> файлом (PDF лучше) или фото.\n"
+        f"Сумма к оплате: <b>{order.amount_rub:.2f} ₽</b>\n"
+        f"/cancel — отменить загрузку.",
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.message(ClientUploadReceipt.waiting_file, F.document | F.photo)
+async def client_upload_file(
+    message: Message,
+    state: FSMContext,
+    orders: OrderService,
+    db: Database,
+    bot: Bot,
+    settings: Settings,
+) -> None:
+    data = await state.get_data()
+    order_id = int(data["upload_order_id"])
+    order = await db.get_order_by_id(order_id)
+    if order is None or message.from_user is None or message.from_user.id != order.client_tg_id:
+        await state.clear()
+        await message.answer("Заявка не найдена.")
+        return
+
+    file_id: str
+    file_unique_id: str
+    filename: str
+    mime: str | None
+
+    if message.document:
+        file_id = message.document.file_id
+        file_unique_id = message.document.file_unique_id
+        filename = message.document.file_name or "receipt.bin"
+        mime = message.document.mime_type
+    else:
+        photo = message.photo[-1]
+        file_id = photo.file_id
+        file_unique_id = photo.file_unique_id
+        filename = "receipt.jpg"
+        mime = "image/jpeg"
+
+    from io import BytesIO
+
+    downloadable = message.document if message.document else message.photo[-1]
+    buffer = await bot.download(downloadable)
+    if buffer is None:
+        await message.answer("Не удалось скачать файл из Telegram.")
+        return
+    if isinstance(buffer, BytesIO):
+        file_bytes = buffer.getvalue()
+    else:
+        file_bytes = buffer.read() if hasattr(buffer, "read") else bytes(buffer)
+
+    await message.answer("Чек получен, запускаю автопроверку…")
+    try:
+        order, result = await orders.submit_receipt(
+            order,
+            file_id=file_id,
+            file_unique_id=file_unique_id,
+            file_bytes=file_bytes,
+            filename=filename,
+            mime_type=mime,
+        )
+    except OrderError as exc:
+        await message.answer(str(exc))
+        return
+
+    await state.clear()
+
+    if result.ok:
+        text = (
+            "✅ Автопроверка пройдена. Заявка ушла саппорту на подтверждение.\n\n"
+            + order.short_card()
+        )
+    else:
+        text = (
+            "⚠️ Автопроверка не прошла.\n"
+            f"Причина: {result.message}\n"
+            "Можете загрузить другой чек или дождаться решения саппорта.\n\n"
+            + order.short_card()
+        )
+
+    await message.answer(text, parse_mode="HTML", reply_markup=client_order_kb(order))
+    await _notify_staff_receipt(bot, settings, order, result.ok, result.message)
+
+
+async def _notify_staff_receipt(
+    bot: Bot, settings: Settings, order, ok: bool, message: str
+) -> None:
+    mark = "✅" if ok else "⚠️"
+    text = (
+        f"{mark} Чек по {order.public_id}\n"
+        f"Автопроверка: {'passed' if ok else 'failed'}\n"
+        f"{message}\n\n"
+        + order.short_card()
+    )
+    for tg_id in set(settings.support_ids) | set(settings.admin_ids):
+        try:
+            await bot.send_message(tg_id, text, parse_mode="HTML")
+        except Exception:
+            logger.exception("notify receipt failed for %s", tg_id)
+
+
+@router.message(ClientUploadReceipt.waiting_file)
+async def client_upload_wrong(message: Message) -> None:
+    await message.answer("Пришлите файл или фото чека, либо /cancel.")

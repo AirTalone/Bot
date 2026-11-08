@@ -1,88 +1,117 @@
-# Telegram-бот: ссылка → QR в стиле СБП
+# Telegram-бот: обмен RUB → USDT
 
-Пришлите боту ссылку вида `https://qr.nspk.ru/...` — он ответит PNG QR-кодом в фирменном цвете СБП (`#1d1346`) на белом фоне со скруглёнными углами.
+Заявки с ручной выдачей реквизитов (с площадки выплат), загрузкой чека, автопроверкой (Fraudex / HTTP / mock) и выплатой USDT администратором.
 
-Никаких платных API: QR строится локально из самой ссылки (в QR СБП как раз и закодирован этот URL).
+Старый режим «ссылка СБП → QR» сохранён: команда `/qr`.
 
-## Быстрый старт (бесплатно)
+## Поток заявки
 
-### 1. Создайте бота в Telegram
+```
+Клиент создаёт заявку
+        ↓
+ awaiting_requisites     ← саппорт ищет реквизиты на площадке выплат
+        ↓
+ awaiting_payment        ← клиенту ушли реквизиты (+ QR, если есть ссылка СБП)
+        ↓
+ checking_receipt        ← клиент загрузил чек, идёт автопроверка
+        ↓
+   ┌────┴────┐
+   ↓         ↓
+awaiting_    receipt_
+support_     rejected     ← можно залить другой чек или саппорт берёт вручную
+review
+   ↓
+ awaiting_payout         ← саппорт одобрил оплату
+        ↓
+ completed               ← админ отправил USDT и вписал TxID
+```
 
-1. Откройте [@BotFather](https://t.me/BotFather)
-2. Команда `/newbot` → задайте имя и username
-3. Скопируйте токен вида `123456:ABC-DEF...`
+Дополнительно: `cancelled`, `expired` (таймер после выдачи реквизитов), `disputed`.
 
-### 2. Запустите локально
+### Статусы
+
+| Статус | Кто действует | Что происходит |
+|---|---|---|
+| `awaiting_requisites` | Саппорт | Заявка создана. Под заявку ищутся реквизиты на площадке выплат |
+| `awaiting_payment` | Клиент | Реквизиты выданы. Клиент платит и готовит чек |
+| `checking_receipt` | Бот | Чек отправлен в сервис автопроверки |
+| `receipt_rejected` | Клиент / саппорт | Автопроверка (или саппорт) отклонила чек |
+| `awaiting_support_review` | Саппорт | Автопроверка ок — нужно ручное одобрение |
+| `awaiting_payout` | Админ | Оплата подтверждена — админ шлёт USDT |
+| `completed` | — | Выплата зафиксирована (есть TxID) |
+| `cancelled` | Клиент / саппорт / админ | Отменена |
+| `expired` | Бот | Истёк TTL оплаты |
+| `disputed` | Админ | Спор, ручная разборка |
+
+### Роли
+
+- **Клиент** — создаёт заявку, получает реквизиты, грузит чек.
+- **Саппорт** (`SUPPORT_IDS`) — вставляет реквизиты с площадки, смотрит автопроверку, одобряет/отклоняет.
+- **Админ** (`ADMIN_IDS`) — только он отмечает выплату USDT (вывод средств руками). Админ также имеет права саппорта.
+
+## Быстрый старт
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
+source .venv/bin/activate
 pip install -r requirements.txt
 
 cp .env.example .env
-# впишите BOT_TOKEN=... в файл .env
+# BOT_TOKEN, ADMIN_IDS, SUPPORT_IDS, USDT_RATE_RUB
 
 python bot.py
 ```
 
-Напишите боту любую ссылку — получите картинку QR.
-
-### 3. Без Telegram (один файл)
+Тесты:
 
 ```bash
-python generate_once.py "https://qr.nspk.ru/AD101055EDK5J0E099CQ1IGD7IAVBQK0" qr.png
+python -m unittest test_qr_generator.py test_exchange.py -v
 ```
 
-## Как это работает
+## Команды
 
-Ссылка НСПК уже содержит всё нужное для оплаты. Бот:
+| Команда | Кто | Назначение |
+|---|---|---|
+| `/exchange` | клиент | Новая заявка |
+| `/orders` | клиент | Мои заявки |
+| `/rate` | все | Курс и лимиты |
+| `/support` | саппорт/админ | Очереди: реквизиты / проверка / в оплате |
+| `/admin` | админ | Очереди: выплата USDT / споры |
+| `/qr` | все | Утилита QR из ссылки СБП |
 
-1. достаёт URL из сообщения;
-2. кодирует его в QR (ISO/IEC 18004);
-3. красит модули в официальный фиолетовый СБП `#1d1346`;
-4. добавляет белый «quiet zone» и скруглённую рамку;
-5. присылает PNG в чат.
+## Проверка чеков (Fraudex и аналоги)
 
-## Бесплатный хостинг (чтобы бот работал 24/7)
+Публичного стабильного API у Fraudex в открытом доступе нет. В боте сделан провайдер:
 
-Нужен любой сервер, где крутится `python bot.py` или Docker-контейнер.
+1. `RECEIPT_PROVIDER=mock` — для разработки (имя файла с `fail` → reject).
+2. `RECEIPT_PROVIDER=http` (или `fraudex`) — POST multipart на `RECEIPT_API_URL` с полями `file`, `api_key`, `price` / `expected_amount`, `user_id`, `order_id`.
 
-Варианты без оплаты / с бесплатным тарифом:
+Когда будет ключ/URL от Fraudex или другого сервиса — пропиши в `.env`:
 
-| Куда | Как |
-|------|-----|
-| Свой ПК / ноутбук | Просто держите `python bot.py` запущенным |
-| [Railway](https://railway.app) / [Render](https://render.com) / [Fly.io](https://fly.io) | Залейте репозиторий, задайте env `BOT_TOKEN`, команда старта `python bot.py` |
-| VPS (Timeweb, Selectel и т.п.) | `docker build -t sbp-qr-bot . && docker run -e BOT_TOKEN=... sbp-qr-bot` |
+```env
+RECEIPT_PROVIDER=http
+RECEIPT_API_URL=https://...
+RECEIPT_API_KEY=...
+```
 
-Docker:
+Если ответ сервиса не распознан как success — статус `receipt_rejected`, саппорт всё равно видит заявку и может одобрить вручную.
+
+## Docker
 
 ```bash
-docker build -t sbp-qr-bot .
-docker run --rm -e BOT_TOKEN=123456:ABC... sbp-qr-bot
+docker build -t exchange-bot .
+docker run --rm --env-file .env -v exchange-data:/app/data exchange-bot
 ```
-
-> На бесплатных PaaS иногда «засыпают» веб-сервисы. Для Telegram-бота лучше режим **worker** / background process (long polling), а не web-hook на засыпающем HTTP-сервисе.
 
 ## Структура
 
 ```
-bot.py            — Telegram-бот (aiogram 3)
-qr_generator.py   — генерация QR в стиле СБП
-generate_once.py  — генерация одного PNG из CLI
-requirements.txt
-Dockerfile
-.env.example
+bot.py                 — точка входа
+exchange/
+  statuses.py          — статусы и переходы
+  config.py / db.py    — настройки и SQLite
+  services.py          — бизнес-логика
+  receipt/             — mock + HTTP (Fraudex-совместимый адаптер)
+  handlers/            — клиент / саппорт / админ / QR
+qr_generator.py        — QR в стиле СБП
 ```
-
-## Зависимости
-
-- Python 3.10+
-- `aiogram` — Telegram Bot API
-- `qrcode` + `Pillow` — картинка QR
-- `python-dotenv` — токен из `.env`
-
-## Безопасность
-
-- Не публикуйте `BOT_TOKEN` в git (файл `.env` уже в `.gitignore`)
-- Бот не хранит ссылки и не ходит во внешние платные сервисы
