@@ -161,6 +161,41 @@ class OrderServiceTests(unittest.IsolatedAsyncioTestCase):
                 usdt_address="TXzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
             )
 
+    async def test_optional_wallet_later(self) -> None:
+        order = await self.orders.create_order(
+            client_tg_id=13,
+            client_username=None,
+            amount_rub=4000,
+            usdt_address="",
+        )
+        self.assertFalse(order.has_usdt_address)
+        order = await self.orders.assign_requisites(
+            order,
+            support_tg_id=2,
+            requisites=Requisites(bank="Сбер", detail="+79001112233"),
+        )
+        order, _ = await self.orders.submit_receipt(
+            order,
+            file_id="f",
+            file_unique_id="u",
+            file_bytes=b"ok",
+            filename="ok.pdf",
+            mime_type="application/pdf",
+        )
+        order = await self.orders.support_approve(order, support_tg_id=2)
+        with self.assertRaises(OrderError):
+            await self.orders.admin_complete_payout(
+                order, admin_tg_id=1, txid="0xdeadbeefcafebabe"
+            )
+        order = await self.orders.set_usdt_address(
+            order, usdt_address="TXaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        )
+        self.assertTrue(order.has_usdt_address)
+        order = await self.orders.admin_complete_payout(
+            order, admin_tg_id=1, txid="0xdeadbeefcafebabe"
+        )
+        self.assertEqual(order.status, OrderStatus.COMPLETED)
+
 
 class MockReceiptTests(unittest.IsolatedAsyncioTestCase):
     async def test_mock_pass_fail(self) -> None:

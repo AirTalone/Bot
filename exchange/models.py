@@ -65,15 +65,27 @@ class Order:
     def status_label(self) -> str:
         return label(self.status)
 
+    @property
+    def has_usdt_address(self) -> bool:
+        addr = (self.usdt_address or "").strip()
+        if len(addr) < 20:
+            return False
+        return addr.lower() not in {"pending", "не указан", "n/a", "none"}
+
     def short_card(self) -> str:
         user = f"@{self.client_username}" if self.client_username else str(self.client_tg_id)
+        address_line = (
+            f"Адрес: <code>{self.usdt_address}</code>"
+            if self.has_usdt_address
+            else "Адрес USDT: <b>не указан</b> (можно позже)"
+        )
         lines = [
             f"Заявка <b>{self.public_id}</b>",
             f"Статус: <b>{self.status_label}</b>",
             f"Клиент: {user}",
             f"Сумма: <b>{self.amount_rub:.2f} ₽</b> → <b>{self.amount_usdt:.4f} USDT</b>",
             f"Курс: {self.rate:.4f} ₽/USDT",
-            f"Адрес: <code>{self.usdt_address}</code>",
+            address_line,
         ]
         if self.requisites_detail:
             lines.append("")

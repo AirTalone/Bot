@@ -66,10 +66,26 @@ async def process_amount(
     await state.update_data(amount_rub=amount)
     await state.set_state(ClientCreateOrder.address)
     await message.answer(
-        f"Сумма: <b>{amount:.2f} ₽</b> ≈ <b>{usdt:.4f} USDT</b>\n"
-        f"Пришлите адрес USDT (TRC-20 / как принимаете).",
+        f"Сумма: <b>{amount:.2f} ₽</b> ≈ <b>{usdt:.4f} USDT</b>\n\n"
+        "Пришлите адрес USDT (TRC-20 / как принимаете)\n"
+        "или напишите <b>пропустить</b> / <b>-</b>, если адрес дадите позже "
+        "(через саппорта или кнопкой «Указать кошелёк USDT»).",
         parse_mode="HTML",
     )
+
+
+def _is_skip_address(text: str) -> bool:
+    normalized = text.strip().lower().replace("ё", "е")
+    return normalized in {
+        "-",
+        "—",
+        "пропустить",
+        "пропуск",
+        "позже",
+        "нет",
+        "skip",
+        "later",
+    }
 
 
 @router.message(ClientCreateOrder.address)
@@ -80,7 +96,8 @@ async def process_address(
     settings: Settings,
     bot: Bot,
 ) -> None:
-    address = (message.text or "").strip()
+    raw = (message.text or "").strip()
+    address = "" if _is_skip_address(raw) else raw
     data = await state.get_data()
     amount = float(data["amount_rub"])
     user = message.from_user
@@ -99,10 +116,17 @@ async def process_address(
         return
 
     await state.clear()
+    extra = ""
+    if not order.has_usdt_address:
+        extra = (
+            "\n\nАдрес USDT пока не указан — его можно добавить позже "
+            "кнопкой «Указать кошелёк USDT» или через саппорта."
+        )
     await message.answer(
         "Заявка создана.\n\n"
         + order.short_card()
-        + "\n\nСаппорт подберёт реквизиты под ваш запрос. Обычно это занимает несколько минут.",
+        + "\n\nСаппорт подберёт реквизиты под ваш запрос. Обычно это занимает несколько минут."
+        + extra,
         parse_mode="HTML",
         reply_markup=client_order_kb(order),
     )

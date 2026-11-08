@@ -10,6 +10,10 @@ class ClientUploadReceipt(StatesGroup):
     waiting_file = State()
 
 
+class SetUsdtAddress(StatesGroup):
+    waiting = State()
+
+
 class SupportAssignRequisites(StatesGroup):
     bank = State()
     detail = State()

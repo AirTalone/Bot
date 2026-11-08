@@ -19,6 +19,31 @@ def client_main_kb() -> ReplyKeyboardMarkup:
 
 def client_order_kb(order: Order) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
+    if order.status == OrderStatus.AWAITING_PAYMENT:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="Я оплатил",
+                    callback_data=f"client:upload:{order.id}",
+                )
+            ]
+        )
+    if order.status in {
+        OrderStatus.AWAITING_REQUISITES,
+        OrderStatus.AWAITING_PAYMENT,
+        OrderStatus.RECEIPT_REJECTED,
+        OrderStatus.AWAITING_SUPPORT_REVIEW,
+        OrderStatus.AWAITING_PAYOUT,
+        OrderStatus.DISPUTED,
+    } and not order.has_usdt_address:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="Указать кошелёк USDT",
+                    callback_data=f"wallet:set:{order.id}",
+                )
+            ]
+        )
     if order.status in {
         OrderStatus.AWAITING_REQUISITES,
         OrderStatus.AWAITING_PAYMENT,
@@ -31,16 +56,6 @@ def client_order_kb(order: Order) -> InlineKeyboardMarkup:
                     callback_data=f"client:cancel:{order.id}",
                 )
             ]
-        )
-    if order.status == OrderStatus.AWAITING_PAYMENT:
-        rows.insert(
-            0,
-            [
-                InlineKeyboardButton(
-                    text="Я оплатил",
-                    callback_data=f"client:upload:{order.id}",
-                )
-            ],
         )
     if order.status == OrderStatus.RECEIPT_REJECTED:
         rows.append(
@@ -96,6 +111,19 @@ def support_order_kb(order: Order) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text="Выдать реквизиты",
                     callback_data=f"support:req:{oid}",
+                )
+            ]
+        )
+    if order.status not in {OrderStatus.COMPLETED, OrderStatus.CANCELLED}:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=(
+                        "Указать кошелёк USDT"
+                        if not order.has_usdt_address
+                        else "Сменить кошелёк USDT"
+                    ),
+                    callback_data=f"wallet:set:{oid}",
                 )
             ]
         )
@@ -172,6 +200,19 @@ def admin_home_kb() -> InlineKeyboardMarkup:
 
 def admin_order_kb(order: Order) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
+    if order.status not in {OrderStatus.COMPLETED, OrderStatus.CANCELLED}:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=(
+                        "Указать кошелёк USDT"
+                        if not order.has_usdt_address
+                        else "Сменить кошелёк USDT"
+                    ),
+                    callback_data=f"wallet:set:{order.id}",
+                )
+            ]
+        )
     if order.status == OrderStatus.AWAITING_PAYOUT:
         rows.append(
             [

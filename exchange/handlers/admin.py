@@ -68,6 +68,15 @@ async def admin_payout_start(
     if order is None:
         await callback.answer("Не найдено", show_alert=True)
         return
+    if not order.has_usdt_address:
+        await callback.message.answer(  # type: ignore[union-attr]
+            f"У заявки <b>{order.public_id}</b> ещё нет USDT-адреса.\n"
+            "Сначала нажмите «Указать кошелёк USDT», потом фиксируйте выплату.",
+            parse_mode="HTML",
+            reply_markup=admin_order_kb(order),
+        )
+        await callback.answer("Нужен адрес кошелька", show_alert=True)
+        return
     await state.set_state(AdminPayout.waiting_txid)
     await state.update_data(payout_order_id=order.id)
     await callback.message.answer(  # type: ignore[union-attr]

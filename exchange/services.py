@@ -41,8 +41,9 @@ class OrderService:
             raise OrderError(
                 f"Максимальная сумма: {self.settings.max_amount_rub:.0f} ₽"
             )
-        address = usdt_address.strip()
-        if len(address) < 20:
+        address = (usdt_address or "").strip()
+        # Адрес необязателен на старте: клиент/саппорт могут указать позже.
+        if address and len(address) < 20:
             raise OrderError("Похоже на некорректный USDT-адрес")
 
         active = await self.db.active_client_order(client_tg_id)
@@ -62,6 +63,14 @@ class OrderService:
             rate=rate,
             usdt_address=address,
         )
+
+    async def set_usdt_address(self, order: Order, *, usdt_address: str) -> Order:
+        if order.status in {OrderStatus.COMPLETED, OrderStatus.CANCELLED}:
+            raise OrderError("Нельзя менять адрес у закрытой заявки")
+        address = (usdt_address or "").strip()
+        if len(address) < 20:
+            raise OrderError("Похоже на некорректный USDT-адрес")
+        return await self.db.update_fields(order.id, usdt_address=address)
 
     async def _transition(self, order: Order, new_status: OrderStatus) -> None:
         if not can_transition(order.status, new_status):
@@ -253,6 +262,10 @@ class OrderService:
         admin_tg_id: int,
         txid: str,
     ) -> Order:
+        if not order.has_usdt_address:
+            raise OrderError(
+                "Сначала укажите USDT-адрес клиента (кнопка «Указать кошелёк»)"
+            )
         await self._transition(order, OrderStatus.COMPLETED)
         txid = txid.strip()
         if len(txid) < 8:
