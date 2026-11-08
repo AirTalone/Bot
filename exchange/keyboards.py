@@ -33,13 +33,14 @@ def client_order_kb(order: Order) -> InlineKeyboardMarkup:
             ]
         )
     if order.status == OrderStatus.AWAITING_PAYMENT:
-        rows.append(
+        rows.insert(
+            0,
             [
                 InlineKeyboardButton(
-                    text="Я оплатил — загрузить чек",
+                    text="Я оплатил",
                     callback_data=f"client:upload:{order.id}",
                 )
-            ]
+            ],
         )
     if order.status == OrderStatus.RECEIPT_REJECTED:
         rows.append(

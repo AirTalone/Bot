@@ -9,7 +9,7 @@ from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
 from exchange.config import Settings
 from exchange.db import Database
-from exchange.keyboards import support_home_kb, support_order_kb
+from exchange.keyboards import client_order_kb, support_home_kb, support_order_kb
 from exchange.models import Requisites
 from exchange.services import OrderError, OrderService
 from exchange.states import SupportAssignRequisites, SupportNote
@@ -174,11 +174,14 @@ async def support_req_finish(
             f"\nОплатите до: <b>{order.payment_deadline_at.strftime('%H:%M:%S UTC')}</b>\n"
             f"(таймер {settings.payment_ttl_minutes} мин)\n"
         )
-    client_text += "\nПосле оплаты нажмите «Я оплатил — загрузить чек»."
+    client_text += "\nПосле оплаты нажмите кнопку «Я оплатил»."
 
     try:
         await bot.send_message(
-            order.client_tg_id, client_text, parse_mode="HTML"
+            order.client_tg_id,
+            client_text,
+            parse_mode="HTML",
+            reply_markup=client_order_kb(order),
         )
         if order.requisites_sbp_url:
             png = generate_sbp_qr(order.requisites_sbp_url)
@@ -187,6 +190,7 @@ async def support_req_finish(
                 document=BufferedInputFile(png, filename="sbp-qr.png"),
                 caption=order.requisites_sbp_url,
                 disable_content_type_detection=True,
+                reply_markup=client_order_kb(order),
             )
     except Exception:
         logger.exception("Failed to notify client %s", order.client_tg_id)
