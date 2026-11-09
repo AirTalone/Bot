@@ -15,6 +15,7 @@ import logging
 
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import BotCommand, MenuButtonCommands
 from dotenv import load_dotenv
 
 from exchange.config import load_settings
@@ -74,6 +75,21 @@ async def main() -> None:
     dp = Dispatcher(storage=MemoryStorage())
     dp.update.middleware(ContextMiddleware(ctx))
     setup_routers(dp)
+
+    # Меню команд слева от поля ввода в Telegram (без обязательного набора /start)
+    await bot.set_my_commands(
+        [
+            BotCommand(command="start", description="Открыть меню"),
+            BotCommand(command="menu", description="Открыть меню"),
+            BotCommand(command="exchange", description="Новая заявка"),
+            BotCommand(command="orders", description="Мои заявки"),
+            BotCommand(command="rate", description="Курс"),
+            BotCommand(command="help", description="Помощь"),
+            BotCommand(command="support", description="Панель саппорта"),
+            BotCommand(command="admin", description="Панель администратора"),
+        ]
+    )
+    await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
 
     expire_task = asyncio.create_task(expire_loop(order_service, bot))
 

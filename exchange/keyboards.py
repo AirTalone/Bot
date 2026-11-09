@@ -9,11 +9,12 @@ from exchange.statuses import OrderStatus
 def client_main_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="Обменять RUB → USDT")],
+            [KeyboardButton(text="Меню"), KeyboardButton(text="Обменять RUB → USDT")],
             [KeyboardButton(text="Мои заявки"), KeyboardButton(text="Курс")],
             [KeyboardButton(text="Помощь")],
         ],
         resize_keyboard=True,
+        is_persistent=True,
     )
 
 

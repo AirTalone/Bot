@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from aiogram import F, Router
-from aiogram.filters import Command, CommandStart
+from aiogram.filters import Command, CommandStart, StateFilter
+from aiogram.fsm.state import default_state
 from aiogram.types import Message
 
 from exchange.config import Settings
@@ -18,7 +19,7 @@ HELP_TEXT = (
     "4) Чек проходит автопроверку, затем саппорт подтверждает\n"
     "5) Администратор отправляет USDT на ваш адрес\n\n"
     "Команды:\n"
-    "/start — меню\n"
+    "/start или кнопка «Меню» — главное меню\n"
     "/exchange — новая заявка\n"
     "/orders — мои заявки\n"
     "/rate — текущий курс\n"
@@ -27,16 +28,29 @@ HELP_TEXT = (
 )
 
 
-@router.message(CommandStart())
-async def cmd_start(message: Message, settings: Settings) -> None:
+def welcome_text(settings: Settings, user_id: int | None) -> str:
     role_bits = []
-    if message.from_user and settings.is_admin(message.from_user.id):
+    if user_id is not None and settings.is_admin(user_id):
         role_bits.append("админ")
-    elif message.from_user and settings.is_support(message.from_user.id):
+    elif user_id is not None and settings.is_support(user_id):
         role_bits.append("саппорт")
     extra = f"\nВаша роль: {', '.join(role_bits)}" if role_bits else ""
+    return (
+        "Привет! Обмен рублей на USDT через заявки."
+        + extra
+        + "\n\n"
+        + HELP_TEXT
+        + "\n\nМожно пользоваться кнопками внизу экрана — /start писать не обязательно."
+    )
+
+
+@router.message(CommandStart())
+@router.message(Command("menu"))
+@router.message(F.text == "Меню")
+async def cmd_start(message: Message, settings: Settings) -> None:
+    user_id = message.from_user.id if message.from_user else None
     await message.answer(
-        "Привет! Обмен рублей на USDT через заявки." + extra + "\n\n" + HELP_TEXT,
+        welcome_text(settings, user_id),
         reply_markup=client_main_kb(),
         parse_mode="HTML",
     )
@@ -57,4 +71,5 @@ async def cmd_rate(message: Message, settings: Settings) -> None:
         f"Курс для клиента: <b>{settings.effective_rate():.4f}</b> ₽/USDT\n"
         f"Лимиты: {settings.min_amount_rub:.0f}–{settings.max_amount_rub:.0f} ₽",
         parse_mode="HTML",
+        reply_markup=client_main_kb(),
     )
