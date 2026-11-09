@@ -17,14 +17,7 @@ HELP_TEXT = (
     "2) Саппорт подбирает реквизиты под вашу сумму\n"
     "3) Оплачиваете и загружаете чек (PDF/фото)\n"
     "4) Чек проходит автопроверку, затем саппорт подтверждает\n"
-    "5) Администратор отправляет USDT на ваш адрес\n\n"
-    "Команды:\n"
-    "/start или кнопка «Меню» — главное меню\n"
-    "/exchange — новая заявка\n"
-    "/orders — мои заявки\n"
-    "/rate — текущий курс\n"
-    "/support — панель саппорта\n"
-    "/admin — панель администратора"
+    "5) Администратор отправляет USDT на ваш адрес"
 )
 
 
@@ -35,13 +28,8 @@ def welcome_text(settings: Settings, user_id: int | None) -> str:
     elif user_id is not None and settings.is_support(user_id):
         role_bits.append("саппорт")
     extra = f"\nВаша роль: {', '.join(role_bits)}" if role_bits else ""
-    return (
-        "Привет! Обмен рублей на USDT через заявки."
-        + extra
-        + "\n\n"
-        + HELP_TEXT
-        + "\n\nМожно пользоваться кнопками внизу экрана — /start писать не обязательно."
-    )
+    return "Привет! Обмен рублей на USDT через заявки." + extra + "\n\n" + HELP_TEXT
+
 
 
 @router.message(CommandStart())
