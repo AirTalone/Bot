@@ -44,6 +44,12 @@ class Settings:
     cryptocards_authorization: str
     cryptocards_cookie: str
     cryptocards_rate_field: str
+    # Вторая нога курса: bybit_sber20 (логика CC без логина) | api (кабинет CC)
+    cc_rate_source: str
+    bybit_payment_id: str
+    bybit_side: str
+    bybit_ad_index: int
+    bybit_amount: str
 
     def is_admin(self, tg_id: int) -> bool:
         return tg_id in self.admin_ids
@@ -100,4 +106,9 @@ def load_settings() -> Settings:
         cryptocards_cookie=os.getenv("CRYPTOCARDS_COOKIE", "").strip(),
         cryptocards_rate_field=os.getenv("CRYPTOCARDS_RATE_FIELD", "rate").strip()
         or "rate",
+        cc_rate_source=os.getenv("CC_RATE_SOURCE", "bybit_sber20").strip().lower(),
+        bybit_payment_id=os.getenv("BYBIT_PAYMENT_ID", "585").strip() or "585",
+        bybit_side=os.getenv("BYBIT_SIDE", "1").strip() or "1",
+        bybit_ad_index=int(os.getenv("BYBIT_AD_INDEX", "20")),
+        bybit_amount=os.getenv("BYBIT_AMOUNT", "").strip(),
     )

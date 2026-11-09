@@ -23,6 +23,8 @@ from exchange.context import AppContext, ContextMiddleware
 from exchange.db import Database
 from exchange.handlers import setup_routers
 from exchange.rates import RateService
+from exchange.rates.samples import RateSampleStore
+from exchange.rates.service import default_samples_path
 from exchange.receipt import build_receipt_checker
 from exchange.services import OrderService
 
@@ -75,8 +77,10 @@ async def main() -> None:
 
     db = Database(settings.database_path)
     await db.connect()
+    samples = RateSampleStore(default_samples_path(settings.database_path))
+    await samples.connect()
     receipt_checker = build_receipt_checker(settings)
-    rate_service = RateService(settings)
+    rate_service = RateService(settings, samples=samples)
     await rate_service.refresh()
     order_service = OrderService(
         db=db,
@@ -128,6 +132,7 @@ async def main() -> None:
     finally:
         expire_task.cancel()
         rates_task.cancel()
+        await samples.close()
         await db.close()
 
 

@@ -39,6 +39,11 @@ def _settings(**overrides) -> Settings:
         cryptocards_authorization="",
         cryptocards_cookie="",
         cryptocards_rate_field="rate",
+        cc_rate_source="bybit_sber20",
+        bybit_payment_id="585",
+        bybit_side="1",
+        bybit_ad_index=20,
+        bybit_amount="",
     )
     base.update(overrides)
     return Settings(**base)
@@ -226,6 +231,24 @@ class RateCombineTests(unittest.TestCase):
         )
         self.assertEqual(formula, "fallback")
         self.assertAlmostEqual(value, 90.0)
+
+
+class RateSampleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_day_average(self) -> None:
+        from exchange.rates.samples import RateSampleStore
+
+        tmp = tempfile.TemporaryDirectory()
+        store = RateSampleStore(Path(tmp.name) / "samples.db")
+        await store.connect()
+        try:
+            await store.add_sample(source="bybit_sber20", price=86.0)
+            await store.add_sample(source="bybit_sber20", price=88.0)
+            avg, count = await store.day_average("bybit_sber20")
+            self.assertEqual(count, 2)
+            self.assertAlmostEqual(avg or 0.0, 87.0)
+        finally:
+            await store.close()
+            tmp.cleanup()
 
 
 class MockReceiptTests(unittest.IsolatedAsyncioTestCase):
