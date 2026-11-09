@@ -10,6 +10,7 @@ from aiogram.types import CallbackQuery, Message
 from exchange.config import Settings
 from exchange.db import Database
 from exchange.keyboards import client_main_kb, client_order_kb
+from exchange.rates import RateService
 from exchange.services import OrderError, OrderService
 from exchange.states import ClientCreateOrder, ClientUploadReceipt
 from exchange.statuses import OrderStatus
@@ -32,12 +33,14 @@ def _parse_amount(text: str) -> float | None:
 
 @router.message(Command("exchange"))
 @router.message(F.text == "Обменять RUB → USDT")
-async def start_exchange(message: Message, state: FSMContext, settings: Settings) -> None:
+async def start_exchange(
+    message: Message, state: FSMContext, settings: Settings, rates: RateService
+) -> None:
     await state.set_state(ClientCreateOrder.amount)
     await message.answer(
         f"Введите сумму в рублях.\n"
         f"Лимит: {settings.min_amount_rub:.0f}–{settings.max_amount_rub:.0f} ₽\n"
-        f"Курс сейчас: <b>{settings.effective_rate():.4f}</b> ₽/USDT\n\n"
+        f"Курс сейчас: <b>{rates.client_rate():.4f}</b> ₽/USDT\n\n"
         f"Или /cancel чтобы отменить ввод.",
         parse_mode="HTML",
     )
@@ -51,7 +54,7 @@ async def cancel_fsm(message: Message, state: FSMContext) -> None:
 
 @router.message(ClientCreateOrder.amount)
 async def process_amount(
-    message: Message, state: FSMContext, settings: Settings
+    message: Message, state: FSMContext, settings: Settings, rates: RateService
 ) -> None:
     amount = _parse_amount(message.text or "")
     if amount is None:
@@ -62,7 +65,7 @@ async def process_amount(
             f"Сумма вне лимита {settings.min_amount_rub:.0f}–{settings.max_amount_rub:.0f} ₽"
         )
         return
-    usdt = settings.rub_to_usdt(amount)
+    usdt = rates.rub_to_usdt(amount)
     await state.update_data(amount_rub=amount)
     await state.set_state(ClientCreateOrder.address)
     await message.answer(

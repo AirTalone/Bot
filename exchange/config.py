@@ -35,6 +35,15 @@ class Settings:
     # Если true — при провале HTTP-провайдера заявка всё равно уходит саппорту
     # со статусом «чек отклонён», а не зависает.
     receipt_fail_open_to_support: bool
+    # Курсы
+    rate_mode: str  # static | auto
+    rate_formula: str  # max | min | avg
+    rate_refresh_sec: int
+    rate_timeout_sec: float
+    cryptocards_api_url: str
+    cryptocards_authorization: str
+    cryptocards_cookie: str
+    cryptocards_rate_field: str
 
     def is_admin(self, tg_id: int) -> bool:
         return tg_id in self.admin_ids
@@ -43,7 +52,7 @@ class Settings:
         return tg_id in self.support_ids or self.is_admin(tg_id)
 
     def effective_rate(self) -> float:
-        """Курс USDT с учётом спреда (сколько RUB за 1 USDT для клиента)."""
+        """Статический курс USDT с учётом спреда (fallback)."""
         if self.usdt_rate_rub <= 0:
             raise ValueError("USDT_RATE_RUB must be > 0")
         return self.usdt_rate_rub * (1.0 + self.spread_percent / 100.0)
@@ -54,6 +63,12 @@ class Settings:
 
 def load_settings() -> Settings:
     db = os.getenv("DATABASE_PATH", "data/exchange.db").strip()
+    auth = os.getenv("CRYPTOCARDS_AUTHORIZATION", "").strip()
+    token = os.getenv("CRYPTOCARDS_TOKEN", "").strip()
+    if not auth and token:
+        # Удобный короткий вариант: только токен → Bearer
+        auth = token if token.lower().startswith("bearer ") else f"Bearer {token}"
+
     return Settings(
         bot_token=os.getenv("BOT_TOKEN", "").strip(),
         database_path=Path(db),
@@ -74,4 +89,15 @@ def load_settings() -> Settings:
         .strip()
         .lower()
         in {"1", "true", "yes", "on"},
+        rate_mode=os.getenv("RATE_MODE", "auto").strip().lower(),
+        rate_formula=os.getenv("RATE_FORMULA", "max").strip().lower(),
+        rate_refresh_sec=int(os.getenv("RATE_REFRESH_SEC", "60")),
+        rate_timeout_sec=float(os.getenv("RATE_TIMEOUT_SEC", "15")),
+        cryptocards_api_url=os.getenv(
+            "CRYPTOCARDS_API_URL", "https://cryptocards.ws/api/account"
+        ).strip(),
+        cryptocards_authorization=auth,
+        cryptocards_cookie=os.getenv("CRYPTOCARDS_COOKIE", "").strip(),
+        cryptocards_rate_field=os.getenv("CRYPTOCARDS_RATE_FIELD", "rate").strip()
+        or "rate",
     )

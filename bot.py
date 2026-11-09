@@ -22,6 +22,7 @@ from exchange.config import load_settings
 from exchange.context import AppContext, ContextMiddleware
 from exchange.db import Database
 from exchange.handlers import setup_routers
+from exchange.rates import RateService
 from exchange.receipt import build_receipt_checker
 from exchange.services import OrderService
 
@@ -53,6 +54,15 @@ async def expire_loop(orders: OrderService, bot: Bot, interval_sec: int = 60) ->
         await asyncio.sleep(interval_sec)
 
 
+async def rates_loop(rates: RateService, interval_sec: int) -> None:
+    while True:
+        try:
+            await rates.refresh()
+        except Exception:
+            logger.exception("rates_loop error")
+        await asyncio.sleep(max(15, interval_sec))
+
+
 async def main() -> None:
     settings = load_settings()
     if not settings.bot_token:
@@ -66,10 +76,17 @@ async def main() -> None:
     db = Database(settings.database_path)
     await db.connect()
     receipt_checker = build_receipt_checker(settings)
+    rate_service = RateService(settings)
+    await rate_service.refresh()
     order_service = OrderService(
-        db=db, settings=settings, receipt_checker=receipt_checker
+        db=db,
+        settings=settings,
+        receipt_checker=receipt_checker,
+        rates=rate_service,
     )
-    ctx = AppContext(settings=settings, db=db, orders=order_service)
+    ctx = AppContext(
+        settings=settings, db=db, orders=order_service, rates=rate_service
+    )
 
     bot = Bot(token=settings.bot_token)
     dp = Dispatcher(storage=MemoryStorage())
@@ -92,12 +109,17 @@ async def main() -> None:
     await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
 
     expire_task = asyncio.create_task(expire_loop(order_service, bot))
+    rates_task = asyncio.create_task(
+        rates_loop(rate_service, settings.rate_refresh_sec)
+    )
 
     me = await bot.get_me()
+    snap = rate_service.snapshot()
     logger.info(
-        "Exchange bot @%s started; rate=%.4f; receipt=%s; db=%s",
+        "Exchange bot @%s started; client_rate=%.4f mode=%s receipt=%s db=%s",
         me.username,
-        settings.effective_rate(),
+        snap.client,
+        snap.mode,
         settings.receipt_provider,
         settings.database_path,
     )
@@ -105,6 +127,7 @@ async def main() -> None:
         await dp.start_polling(bot)
     finally:
         expire_task.cancel()
+        rates_task.cancel()
         await db.close()
 
 

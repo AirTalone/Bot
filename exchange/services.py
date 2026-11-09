@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from exchange.config import Settings
 from exchange.db import Database
 from exchange.models import Order, Requisites, iso, utcnow
+from exchange.rates import RateService
 from exchange.receipt.base import ReceiptCheckResult, ReceiptChecker
 from exchange.statuses import OrderStatus, can_transition
 
@@ -24,6 +25,17 @@ class OrderService:
     db: Database
     settings: Settings
     receipt_checker: ReceiptChecker
+    rates: RateService | None = None
+
+    def _client_rate(self) -> float:
+        if self.rates is not None:
+            return self.rates.client_rate()
+        return self.settings.effective_rate()
+
+    def _rub_to_usdt(self, amount_rub: float) -> float:
+        if self.rates is not None:
+            return self.rates.rub_to_usdt(amount_rub)
+        return self.settings.rub_to_usdt(amount_rub)
 
     async def create_order(
         self,
@@ -53,8 +65,8 @@ class OrderService:
                 f"({active.status_label}). Дождитесь завершения или отмените её."
             )
 
-        rate = self.settings.effective_rate()
-        amount_usdt = self.settings.rub_to_usdt(amount_rub)
+        rate = self._client_rate()
+        amount_usdt = self._rub_to_usdt(amount_rub)
         return await self.db.create_order(
             client_tg_id=client_tg_id,
             client_username=client_username,

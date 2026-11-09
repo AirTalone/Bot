@@ -31,6 +31,14 @@ def _settings(**overrides) -> Settings:
         receipt_api_key="",
         receipt_api_timeout_sec=5.0,
         receipt_fail_open_to_support=True,
+        rate_mode="static",
+        rate_formula="max",
+        rate_refresh_sec=60,
+        rate_timeout_sec=5.0,
+        cryptocards_api_url="https://cryptocards.ws/api/account",
+        cryptocards_authorization="",
+        cryptocards_cookie="",
+        cryptocards_rate_field="rate",
     )
     base.update(overrides)
     return Settings(**base)
@@ -195,6 +203,29 @@ class OrderServiceTests(unittest.IsolatedAsyncioTestCase):
             order, admin_tg_id=1, txid="0xdeadbeefcafebabe"
         )
         self.assertEqual(order.status, OrderStatus.COMPLETED)
+
+
+class RateCombineTests(unittest.TestCase):
+    def test_max_avg_fallback(self) -> None:
+        from exchange.rates.service import combine_rates
+
+        value, formula = combine_rates(
+            rapira=80.0, cryptocards=86.96, formula="max", fallback=90.0
+        )
+        self.assertEqual(formula, "max")
+        self.assertAlmostEqual(value, 86.96)
+
+        value, formula = combine_rates(
+            rapira=80.0, cryptocards=86.96, formula="avg", fallback=90.0
+        )
+        self.assertEqual(formula, "avg")
+        self.assertAlmostEqual(value, (80.0 + 86.96) / 2)
+
+        value, formula = combine_rates(
+            rapira=None, cryptocards=None, formula="max", fallback=90.0
+        )
+        self.assertEqual(formula, "fallback")
+        self.assertAlmostEqual(value, 90.0)
 
 
 class MockReceiptTests(unittest.IsolatedAsyncioTestCase):

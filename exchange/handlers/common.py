@@ -52,12 +52,12 @@ async def cmd_help(message: Message) -> None:
 
 @router.message(Command("rate"))
 @router.message(F.text == "Курс")
-async def cmd_rate(message: Message, settings: Settings) -> None:
+async def cmd_rate(message: Message, settings: Settings, rates) -> None:
+    snap = rates.snapshot()
     await message.answer(
-        f"Базовый курс: <b>{settings.usdt_rate_rub:.4f}</b> ₽/USDT\n"
-        f"Спред: <b>{settings.spread_percent:.2f}%</b>\n"
-        f"Курс для клиента: <b>{settings.effective_rate():.4f}</b> ₽/USDT\n"
-        f"Лимиты: {settings.min_amount_rub:.0f}–{settings.max_amount_rub:.0f} ₽",
+        snap.summary_html()
+        + f"\nСпред: <b>{settings.spread_percent:.2f}%</b>"
+        + f"\nЛимиты: {settings.min_amount_rub:.0f}–{settings.max_amount_rub:.0f} ₽",
         parse_mode="HTML",
         reply_markup=client_main_kb(),
     )
