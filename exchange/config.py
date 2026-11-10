@@ -37,7 +37,7 @@ class Settings:
     receipt_fail_open_to_support: bool
     # Курсы
     rate_mode: str  # static | auto
-    rate_formula: str  # max | min | avg
+    rate_formula: str  # spread | max | min | avg
     rate_refresh_sec: int
     rate_timeout_sec: float
     cryptocards_api_url: str
@@ -46,6 +46,12 @@ class Settings:
     cryptocards_ukey: str  # Local Storage "ukey" → заголовок x-ukey
     cryptocards_cookie: str
     cryptocards_rate_field: str
+    # Формула spread: спред CryptoCards + целевая маржа + наценки ₽
+    cc_edge_percent: float  # твой спред на CC (обычно до 2%)
+    target_margin_percent: float  # цель прибыли, когда курсы близки (1–2%)
+    good_gap_percent: float  # Rapira выше CC на столько % → «хороший» рынок
+    markup_rub_default: float  # Rapira + N ₽ в обычном режиме
+    markup_rub_good: float  # Rapira + N ₽ когда рынок хороший
     # Вторая нога курса: bybit_sber20 (логика CC без логина) | api (кабинет CC)
     cc_rate_source: str
     bybit_payment_id: str
@@ -101,7 +107,7 @@ def load_settings() -> Settings:
         .lower()
         in {"1", "true", "yes", "on"},
         rate_mode=os.getenv("RATE_MODE", "auto").strip().lower(),
-        rate_formula=os.getenv("RATE_FORMULA", "max").strip().lower(),
+        rate_formula=os.getenv("RATE_FORMULA", "spread").strip().lower(),
         rate_refresh_sec=int(os.getenv("RATE_REFRESH_SEC", "60")),
         rate_timeout_sec=float(os.getenv("RATE_TIMEOUT_SEC", "15")),
         cryptocards_api_url=os.getenv(
@@ -113,6 +119,11 @@ def load_settings() -> Settings:
         cryptocards_cookie=os.getenv("CRYPTOCARDS_COOKIE", "").strip(),
         cryptocards_rate_field=os.getenv("CRYPTOCARDS_RATE_FIELD", "rate").strip()
         or "rate",
+        cc_edge_percent=float(os.getenv("CC_EDGE_PERCENT", "2")),
+        target_margin_percent=float(os.getenv("TARGET_MARGIN_PERCENT", "1.5")),
+        good_gap_percent=float(os.getenv("GOOD_GAP_PERCENT", "0.3")),
+        markup_rub_default=float(os.getenv("MARKUP_RUB_DEFAULT", "1")),
+        markup_rub_good=float(os.getenv("MARKUP_RUB_GOOD", "0.7")),
         cc_rate_source=os.getenv("CC_RATE_SOURCE", "bybit_sber20").strip().lower(),
         bybit_payment_id=os.getenv("BYBIT_PAYMENT_ID", "585").strip() or "585",
         bybit_side=os.getenv("BYBIT_SIDE", "1").strip() or "1",

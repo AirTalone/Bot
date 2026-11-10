@@ -32,7 +32,7 @@ def _settings(**overrides) -> Settings:
         receipt_api_timeout_sec=5.0,
         receipt_fail_open_to_support=True,
         rate_mode="static",
-        rate_formula="max",
+        rate_formula="spread",
         rate_refresh_sec=60,
         rate_timeout_sec=5.0,
         cryptocards_api_url="https://cryptocards.ws/api/account",
@@ -41,6 +41,11 @@ def _settings(**overrides) -> Settings:
         cryptocards_ukey="",
         cryptocards_cookie="",
         cryptocards_rate_field="rate",
+        cc_edge_percent=2.0,
+        target_margin_percent=1.5,
+        good_gap_percent=0.3,
+        markup_rub_default=1.0,
+        markup_rub_good=0.7,
         cc_rate_source="bybit_sber20",
         bybit_payment_id="585",
         bybit_side="1",
@@ -233,6 +238,57 @@ class RateCombineTests(unittest.TestCase):
         )
         self.assertEqual(formula, "fallback")
         self.assertAlmostEqual(value, 90.0)
+
+
+class SpreadRateTests(unittest.TestCase):
+    def test_similar_rates_target_margin(self) -> None:
+        """Курсы сошлись → ~1.5% от себестоимости (CC − 2%)."""
+        from exchange.rates.service import compute_spread_rate, margin_percent
+
+        base, client, cost, margin, label = compute_spread_rate(
+            rapira=80.0,
+            cryptocards=80.0,
+            fallback=90.0,
+            cc_edge_percent=2.0,
+            target_margin_percent=1.5,
+        )
+        self.assertAlmostEqual(cost or 0.0, 78.4)
+        self.assertAlmostEqual(client, 78.4 * 1.015)
+        self.assertAlmostEqual(margin or 0.0, 1.5, places=2)
+        self.assertIn("target", label)
+        self.assertAlmostEqual(margin_percent(client, cost or 1.0), 1.5, places=2)
+
+    def test_good_market_rapira_plus_markup(self) -> None:
+        """Rapira чуть выше CC → Rapira + 0.7, суммарно около 3%."""
+        from exchange.rates.service import compute_spread_rate
+
+        # gap = (80.5 - 80) / 80 = 0.625% >= 0.3%
+        base, client, cost, margin, label = compute_spread_rate(
+            rapira=80.5,
+            cryptocards=80.0,
+            fallback=90.0,
+            cc_edge_percent=2.0,
+            target_margin_percent=1.5,
+            good_gap_percent=0.3,
+            markup_rub_good=0.7,
+        )
+        self.assertAlmostEqual(client, 81.2)
+        self.assertIn("good", label)
+        # себестоимость 78.4 → маржа (81.2/78.4 - 1)*100 ≈ 3.57%
+        self.assertGreater(margin or 0.0, 3.0)
+        self.assertLess(margin or 0.0, 4.0)
+
+    def test_only_rapira_adds_default_markup(self) -> None:
+        from exchange.rates.service import compute_spread_rate
+
+        _, client, _, _, label = compute_spread_rate(
+            rapira=90.0,
+            cryptocards=None,
+            fallback=90.0,
+            markup_rub_default=1.0,
+        )
+        self.assertAlmostEqual(client, 91.0)
+        self.assertIn("rapira+1", label)
 
 
 class RateSampleTests(unittest.IsolatedAsyncioTestCase):

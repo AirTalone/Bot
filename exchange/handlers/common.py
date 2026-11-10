@@ -54,9 +54,18 @@ async def cmd_help(message: Message) -> None:
 @router.message(F.text == "Курс")
 async def cmd_rate(message: Message, settings: Settings, rates) -> None:
     snap = rates.snapshot()
+    formula = (settings.rate_formula or "").lower()
+    if formula in {"spread", "profit", "margin"}:
+        extra = (
+            f"\nCC edge: <b>{settings.cc_edge_percent:.2f}%</b>"
+            f" · цель: <b>{settings.target_margin_percent:.2f}%</b>"
+            f" · good: Rapira+{settings.markup_rub_good:g}"
+        )
+    else:
+        extra = f"\nСпред: <b>{settings.spread_percent:.2f}%</b>"
     await message.answer(
         snap.summary_html()
-        + f"\nСпред: <b>{settings.spread_percent:.2f}%</b>"
+        + extra
         + f"\nЛимиты: {settings.min_amount_rub:.0f}–{settings.max_amount_rub:.0f} ₽",
         parse_mode="HTML",
         reply_markup=client_main_kb(),

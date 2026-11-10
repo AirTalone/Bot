@@ -33,6 +33,8 @@ class RateSnapshot:
     mode: str
     updated_at: datetime
     cc_samples_today: int = 0
+    effective_cost: float | None = None
+    expected_margin_percent: float | None = None
     errors: tuple[str, ...] = ()
 
     def summary_html(self) -> str:
@@ -48,13 +50,17 @@ class RateSnapshot:
             lines.append(f"Bybit Сбер #20 (сейчас): <b>{nth}</b>")
             if self.cc_samples_today:
                 lines.append(f"Семплов CC-логики за сутки: {self.cc_samples_today}")
+        if self.effective_cost is not None:
+            lines.append(f"Себестоимость (CC − edge): <b>{self.effective_cost:.4f}</b>")
         lines.extend(
             [
                 f"База: <b>{self.base:.4f}</b>",
                 f"Курс клиенту: <b>{self.client:.4f}</b> ₽/USDT",
-                f"Обновлено: {self.updated_at.strftime('%H:%M:%S UTC')}",
             ]
         )
+        if self.expected_margin_percent is not None:
+            lines.append(f"Ожидаемая маржа: <b>{self.expected_margin_percent:.2f}%</b>")
+        lines.append(f"Обновлено: {self.updated_at.strftime('%H:%M:%S UTC')}")
         if self.errors:
             lines.append("Ошибки: " + "; ".join(self.errors))
         return "\n".join(lines)
@@ -76,6 +82,78 @@ def combine_rates(
     if formula in {"avg", "mean", "average"}:
         return sum(values) / len(values), "avg"
     return max(values), "max"
+
+
+def effective_cc_cost(cryptocards: float, cc_edge_percent: float) -> float:
+    """Себестоимость 1 USDT с учётом твоего спреда на CryptoCards."""
+    edge = max(0.0, cc_edge_percent) / 100.0
+    return cryptocards * (1.0 - edge)
+
+
+def margin_percent(client_rate: float, cost: float) -> float:
+    if cost <= 0:
+        return 0.0
+    return (client_rate / cost - 1.0) * 100.0
+
+
+def compute_spread_rate(
+    *,
+    rapira: float | None,
+    cryptocards: float | None,
+    fallback: float,
+    cc_edge_percent: float = 2.0,
+    target_margin_percent: float = 1.5,
+    good_gap_percent: float = 0.3,
+    markup_rub_default: float = 1.0,
+    markup_rub_good: float = 0.7,
+) -> tuple[float, float, float | None, float | None, str]:
+    """
+    Курс клиенту под целевую маржу 1–2% с учётом спреда CryptoCards (~2%).
+
+    Логика:
+    - себестоимость = CC × (1 − cc_edge/100)
+    - если Rapira выше CC на good_gap% и больше → «хороший» рынок:
+      клиенту Rapira + markup_good (обычно +0.7 ₽) → суммарно ~3%
+    - если курсы близки / Rapira не выше → целимся в target_margin от себестоимости
+      (в среднем 1–2%), с потолком Rapira + markup_default
+
+    Returns: (base, client, effective_cost, expected_margin_pct, formula_label)
+    """
+    cc = cryptocards if cryptocards is not None and cryptocards > 0 else None
+    rp = rapira if rapira is not None and rapira > 0 else None
+
+    if cc is None and rp is None:
+        return fallback, fallback, None, None, "fallback"
+
+    if cc is None:
+        # Только Rapira: прежняя привычка Rapira + 1 ₽
+        base = rp  # type: ignore[assignment]
+        client = rp + markup_rub_default
+        return base, client, None, None, f"spread:rapira+{markup_rub_default:g}"
+
+    cost = effective_cc_cost(cc, cc_edge_percent)
+    target_client = cost * (1.0 + max(0.0, target_margin_percent) / 100.0)
+
+    if rp is None:
+        return cc, target_client, cost, margin_percent(target_client, cost), (
+            f"spread:target{target_margin_percent:g}%"
+        )
+
+    gap_pct = (rp - cc) / cc * 100.0
+    if gap_pct >= good_gap_percent:
+        # Rapira чуть выше CC → Rapira + 0.7, плюс ~2% с CC ≈ ~3%
+        base = rp
+        client = rp + markup_rub_good
+        label = f"spread:rapira+{markup_rub_good:g} (good)"
+    else:
+        # Курсы сошлись / Rapira не выше: целимся в 1–2% от себестоимости (CC − edge).
+        # Потолок — привычный Rapira + 1 ₽, чтобы не задирать курс выше обычного.
+        base = rp
+        ceiling = rp + markup_rub_default
+        client = min(target_client, ceiling)
+        label = f"spread:target{target_margin_percent:g}%"
+
+    return base, client, cost, margin_percent(client, cost), label
 
 
 class RateService:
@@ -190,13 +268,35 @@ class RateService:
             logger.warning(cc_err)
             errors.append(cc_err)
 
-        base, used_formula = combine_rates(
-            rapira=rapira,
-            cryptocards=cc_avg,
-            formula=settings.rate_formula,
-            fallback=settings.usdt_rate_rub,
-        )
-        client = base * (1.0 + settings.spread_percent / 100.0)
+        effective_cost: float | None = None
+        expected_margin: float | None = None
+        formula_name = (settings.rate_formula or "spread").lower()
+
+        if formula_name in {"spread", "profit", "margin"}:
+            base, client, effective_cost, expected_margin, used_formula = (
+                compute_spread_rate(
+                    rapira=rapira,
+                    cryptocards=cc_avg,
+                    fallback=settings.usdt_rate_rub,
+                    cc_edge_percent=settings.cc_edge_percent,
+                    target_margin_percent=settings.target_margin_percent,
+                    good_gap_percent=settings.good_gap_percent,
+                    markup_rub_default=settings.markup_rub_default,
+                    markup_rub_good=settings.markup_rub_good,
+                )
+            )
+        else:
+            base, used_formula = combine_rates(
+                rapira=rapira,
+                cryptocards=cc_avg,
+                formula=formula_name,
+                fallback=settings.usdt_rate_rub,
+            )
+            client = base * (1.0 + settings.spread_percent / 100.0)
+            if cc_avg is not None and cc_avg > 0:
+                effective_cost = effective_cc_cost(cc_avg, settings.cc_edge_percent)
+                expected_margin = margin_percent(client, effective_cost)
+
         snap = RateSnapshot(
             rapira=rapira,
             cryptocards=cc_avg,
@@ -207,17 +307,22 @@ class RateService:
             mode="auto",
             updated_at=utcnow(),
             cc_samples_today=samples_count,
+            effective_cost=effective_cost,
+            expected_margin_percent=expected_margin,
             errors=tuple(errors),
         )
         async with self._lock:
             self._snapshot = snap
         logger.info(
-            "Rates refreshed: rapira=%s cc_avg=%s nth=%s base=%.4f client=%.4f",
+            "Rates refreshed: rapira=%s cc_avg=%s nth=%s base=%.4f client=%.4f "
+            "margin=%s formula=%s",
             rapira,
             cc_avg,
             nth,
             base,
             client,
+            f"{expected_margin:.2f}%" if expected_margin is not None else "—",
+            used_formula,
         )
         return snap
 

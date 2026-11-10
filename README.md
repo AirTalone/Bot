@@ -49,6 +49,16 @@ review
 - **Саппорт** (`SUPPORT_IDS`) — вставляет реквизиты с площадки, смотрит автопроверку, одобряет/отклоняет.
 - **Админ** (`ADMIN_IDS`) — только он отмечает выплату USDT (вывод средств руками). Админ также имеет права саппорта.
 
+## Курс (формула `spread`)
+
+По умолчанию `RATE_FORMULA=spread`:
+
+1. Себестоимость = курс CryptoCards × (1 − `CC_EDGE_PERCENT`/100). Обычно edge ≈ 2%.
+2. Если Rapira выше CryptoCards на `GOOD_GAP_PERCENT`% и более → курс клиенту = **Rapira + `MARKUP_RUB_GOOD`** (по умолчанию +0.7 ₽). Вместе с edge CC это даёт около **~3%**.
+3. Если курсы близки → курс от себестоимости с **`TARGET_MARGIN_PERCENT`** (по умолчанию 1.5%, диапазон 1–2%). Потолок — Rapira + `MARKUP_RUB_DEFAULT` (+1 ₽).
+
+Параметры в `.env`: `CC_EDGE_PERCENT`, `TARGET_MARGIN_PERCENT`, `GOOD_GAP_PERCENT`, `MARKUP_RUB_DEFAULT`, `MARKUP_RUB_GOOD`.
+
 ## Быстрый старт
 
 ```bash
