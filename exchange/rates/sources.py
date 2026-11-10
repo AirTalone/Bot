@@ -72,6 +72,26 @@ def _extract_rate_field(payload: Any, field: str = "rate") -> float | None:
     return None
 
 
+def _normalize_cc_secret(raw: str, *, prefix_to_strip: str) -> str:
+    value = (raw or "").strip().strip('"').strip("'")
+    # Иногда из Local Storage копируют JSON целиком.
+    if value.startswith("{") and value.endswith("}"):
+        try:
+            import json
+
+            obj = json.loads(value)
+            for key in ("token", "access_token", "accessToken", "jwt", "auth", "value"):
+                if isinstance(obj, dict) and obj.get(key):
+                    value = str(obj[key]).strip()
+                    break
+        except Exception:
+            pass
+    low = value.lower()
+    if low.startswith(prefix_to_strip):
+        value = value.split(":", 1)[1].strip()
+    return value
+
+
 async def fetch_cryptocards_rate(
     *,
     api_url: str,
@@ -83,45 +103,63 @@ async def fetch_cryptocards_rate(
     """
     Курс из CryptoCards (обычно GET https://cryptocards.ws/api/account → rate).
 
-    Нужна авторизация из DevTools → Headers:
-      Authorization: ...   или   Cookie: ...
+    Нужна авторизация из DevTools → Headers / Local Storage.
     """
     if not api_url:
         raise RuntimeError("CryptoCards API URL is empty")
 
-    auth = (authorization or "").strip().strip('"').strip("'")
-    if auth.lower().startswith("authorization:"):
-        auth = auth.split(":", 1)[1].strip()
-    cookie = (cookie or "").strip().strip('"').strip("'")
-    if cookie.lower().startswith("cookie:"):
-        cookie = cookie.split(":", 1)[1].strip()
+    auth = _normalize_cc_secret(authorization, prefix_to_strip="authorization:")
+    cookie = _normalize_cc_secret(cookie, prefix_to_strip="cookie:")
 
-    auth_candidates: list[str] = []
+    token_values: list[str] = []
     if auth:
-        auth_candidates.append(auth)
-        if not auth.lower().startswith("bearer "):
-            auth_candidates.append(f"Bearer {auth}")
+        raw = auth[7:].strip() if auth.lower().startswith("bearer ") else auth
+        for candidate in (auth, raw, f"Bearer {raw}"):
+            if candidate and candidate not in token_values:
+                token_values.append(candidate)
 
-    if not auth_candidates and not cookie:
+    if not token_values and not cookie:
         raise RuntimeError("CryptoCards: пустой Authorization/Cookie")
 
     timeout = aiohttp.ClientTimeout(total=timeout_sec)
     last_status = None
     last_text = ""
     payload: Any = None
+    browser_headers = {
+        "Accept": "application/json, text/plain, */*",
+        "Origin": "https://cryptocards.ws",
+        "Referer": "https://cryptocards.ws/",
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ),
+    }
+
+    attempts: list[dict[str, str]] = []
+    for token in token_values:
+        attempts.append({"Authorization": token})
+        attempts.append({"Authorization": token, "Cookie": cookie} if cookie else {"Authorization": token})
+        attempts.append({"token": token})
+        attempts.append({"x-access-token": token})
+        attempts.append({"x-auth-token": token})
+        if cookie:
+            attempts.append({"token": token, "Cookie": cookie})
+    if cookie:
+        attempts.append({"Cookie": cookie})
+
+    # убрать дубли
+    uniq_attempts: list[dict[str, str]] = []
+    seen: set[tuple[tuple[str, str], ...]] = set()
+    for item in attempts:
+        key = tuple(sorted(item.items()))
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq_attempts.append(item)
 
     async with aiohttp.ClientSession(timeout=timeout) as session:
-        # Сначала пробуем Authorization (как есть и с Bearer), затем Cookie.
-        attempts: list[dict[str, str]] = []
-        for candidate in auth_candidates:
-            attempts.append({"Authorization": candidate})
-        if cookie:
-            attempts.append({"Cookie": cookie})
-        if not attempts:
-            attempts.append({})
-
-        for extra in attempts:
-            headers = {"Accept": "application/json", **extra}
+        for extra in uniq_attempts:
+            headers = {**browser_headers, **extra}
             async with session.get(api_url, headers=headers) as resp:
                 text = await resp.text()
                 last_status = resp.status
@@ -136,7 +174,8 @@ async def fetch_cryptocards_rate(
         else:
             raise RuntimeError(
                 f"CryptoCards HTTP {last_status}: {last_text} "
-                "(проверь CRYPTOCARDS_AUTHORIZATION из Dolphin → account → Headers)"
+                "(токен/cookie не приняты; возьми значение из Local Storage "
+                "ещё раз или полный Cookie из Request Headers у account)"
             )
 
     rate = _extract_rate_field(payload, rate_field)

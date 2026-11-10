@@ -17,15 +17,20 @@ from exchange.config import load_settings  # noqa: E402
 from exchange.rates.sources import fetch_cryptocards_rate  # noqa: E402
 
 
+def _describe_secret(value: str, label: str) -> None:
+    raw = (value or "").strip()
+    if not raw:
+        print(f"{label}: нет")
+        return
+    print(f"{label}: да · длина={len(raw)} · начинается с={raw[:6]!r}...")
+
+
 async def main() -> None:
     settings = load_settings()
     print("URL:", settings.cryptocards_api_url)
     print("CC_RATE_SOURCE:", settings.cc_rate_source)
-    print(
-        "Authorization задан:"
-        , "да" if settings.cryptocards_authorization else "нет"
-    )
-    print("Cookie задан:", "да" if settings.cryptocards_cookie else "нет")
+    _describe_secret(settings.cryptocards_authorization, "Authorization")
+    _describe_secret(settings.cryptocards_cookie, "Cookie")
     try:
         rate = await fetch_cryptocards_rate(
             api_url=settings.cryptocards_api_url,
@@ -36,6 +41,11 @@ async def main() -> None:
         print(f"OK CryptoCards rate = {rate:.4f}")
     except Exception as exc:
         print("FAIL:", exc)
+        print(
+            "Подсказка: в Local Storage скопируй именно VALUE токена "
+            "(не JSON целиком, если там объект). "
+            "Либо в Network у account возьми полный Cookie из Request Headers."
+        )
         raise SystemExit(1)
 
 
