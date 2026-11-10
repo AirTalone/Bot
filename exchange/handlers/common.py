@@ -54,20 +54,37 @@ async def cmd_help(message: Message) -> None:
 @router.message(F.text == "Курс")
 async def cmd_rate(message: Message, settings: Settings, rates) -> None:
     snap = rates.snapshot()
-    formula = (settings.rate_formula or "").lower()
-    if formula in {"spread", "profit", "margin"}:
-        extra = (
-            f"\nФормула: <b>Rapira + {settings.markup_rub_default:g}</b>"
-            f" · CC edge: <b>{settings.cc_edge_percent:.2f}%</b>"
-            f"\nМин. маржа: ≤40к <b>{settings.min_margin_percent:.2f}%</b>, "
-            f">40к <b>{settings.min_margin_percent_40k:.2f}%</b>"
+    user_id = message.from_user.id if message.from_user else None
+    staff = user_id is not None and settings.is_support(user_id)
+
+    if staff:
+        formula = (settings.rate_formula or "").lower()
+        if formula in {"spread", "profit", "margin"}:
+            extra = (
+                f"\nФормула: <b>Rapira + {settings.markup_rub_default:g}</b>"
+                f" · CC edge: <b>{settings.cc_edge_percent:.2f}%</b>"
+                f"\nМин. маржа: ≤40к <b>{settings.min_margin_percent:.2f}%</b>, "
+                f">40к <b>{settings.min_margin_percent_40k:.2f}%</b>"
+            )
+        else:
+            extra = f"\nСпред: <b>{settings.spread_percent:.2f}%</b>"
+        text = (
+            snap.summary_html()
+            + extra
+            + f"\nЛимиты: {settings.min_amount_rub:.0f}–{settings.max_amount_rub:.0f} ₽"
         )
     else:
-        extra = f"\nСпред: <b>{settings.spread_percent:.2f}%</b>"
+        text = snap.client_summary_html(
+            min_amount_rub=settings.min_amount_rub,
+            max_amount_rub=settings.max_amount_rub,
+            discount_30k=settings.amount_discount_30k,
+            discount_40k=settings.amount_discount_40k,
+            tier_30k=settings.amount_tier_30k,
+            tier_40k=settings.amount_tier_40k,
+        )
+
     await message.answer(
-        snap.summary_html()
-        + extra
-        + f"\nЛимиты: {settings.min_amount_rub:.0f}–{settings.max_amount_rub:.0f} ₽",
+        text,
         parse_mode="HTML",
         reply_markup=client_main_kb(),
     )

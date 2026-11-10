@@ -7,6 +7,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from exchange.config import Settings
 from exchange.rates.bybit_p2p import fetch_nth_sber_ad_price
@@ -23,6 +24,7 @@ from exchange.rates.sources import fetch_cryptocards_rate, fetch_rapira_usdt_rub
 logger = logging.getLogger(__name__)
 
 CC_PROXY_SOURCE = "bybit_sber20"
+MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
 
 def utcnow() -> datetime:
@@ -44,7 +46,32 @@ class RateSnapshot:
     expected_margin_percent: float | None = None
     errors: tuple[str, ...] = ()
 
+    def client_summary_html(
+        self,
+        *,
+        min_amount_rub: float,
+        max_amount_rub: float,
+        discount_30k: float = 0.2,
+        discount_40k: float = 0.3,
+        tier_30k: float = 30_000.0,
+        tier_40k: float = 40_000.0,
+    ) -> str:
+        """Короткий курс для клиента."""
+        rate = f"{self.client:.2f}".rstrip("0").rstrip(".")
+        updated_at = self.updated_at
+        if updated_at.tzinfo is None:
+            updated_at = updated_at.replace(tzinfo=timezone.utc)
+        updated = updated_at.astimezone(MOSCOW_TZ).strftime("%H:%M")
+        return (
+            f"<b>{rate}</b> ₽ / USDT\n\n"
+            f"от {min_amount_rub:,.0f} до {max_amount_rub:,.0f} ₽\n"
+            f"от {tier_30k:,.0f} ₽ → −{discount_30k:g}\n"
+            f"от {tier_40k:,.0f} ₽ → −{discount_40k:g}\n\n"
+            f"обновлено {updated}"
+        ).replace(",", " ")
+
     def summary_html(self) -> str:
+        """Подробности для саппорта/админа."""
         rapira = f"{self.rapira:.4f}" if self.rapira is not None else "—"
         cc = f"{self.cryptocards:.4f}" if self.cryptocards is not None else "—"
         nth = f"{self.bybit_nth:.4f}" if self.bybit_nth is not None else "—"
@@ -59,16 +86,10 @@ class RateSnapshot:
                 lines.append(f"Семплов CC-логики за сутки: {self.cc_samples_today}")
         if self.effective_cost is not None:
             lines.append(f"Себестоимость (CC − edge): <b>{self.effective_cost:.4f}</b>")
-        lines.extend(
-            [
-                f"База (Rapira+markup, без скидки по сумме): <b>{self.client:.4f}</b>",
-                "Скидки по сумме: >30к и >40к (см. .env)",
-            ]
-        )
+        lines.append(f"Курс клиенту (база): <b>{self.client:.4f}</b>")
         if self.expected_margin_percent is not None:
             lines.append(
-                f"Маржа к закупу (на базе без скидки): "
-                f"<b>{self.expected_margin_percent:.2f}%</b>"
+                f"Маржа к закупу: <b>{self.expected_margin_percent:.2f}%</b>"
             )
         lines.append(f"Обновлено: {self.updated_at.strftime('%H:%M:%S UTC')}")
         if self.errors:
