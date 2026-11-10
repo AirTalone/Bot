@@ -2,55 +2,113 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
+import shutil
 from typing import Any
 
 import aiohttp
 
 logger = logging.getLogger(__name__)
 
+RAPIRA_URL = "https://api.rapira.net/open/market/rates"
+RAPIRA_HEADERS = {
+    "Accept": "application/json",
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    ),
+}
+
+
+def _parse_rapira_usdt_rub(payload: Any) -> float:
+    items = payload.get("data", payload) if isinstance(payload, dict) else payload
+    if not isinstance(items, list):
+        raise RuntimeError("Rapira: unexpected response shape")
+    for row in items:
+        if not isinstance(row, dict):
+            continue
+        if row.get("symbol") != "USDT/RUB":
+            continue
+        for key in ("askPrice", "close", "bidPrice"):
+            value = row.get(key)
+            if value is None:
+                continue
+            rate = float(value)
+            if rate > 0:
+                return rate
+    raise RuntimeError("Rapira: USDT/RUB not found")
+
+
+async def _fetch_rapira_via_curl(*, timeout_sec: float) -> float:
+    """Запасной путь: curl --http1.1 (aiohttp на части VPS ловит Server disconnected)."""
+    curl = shutil.which("curl")
+    if not curl:
+        raise RuntimeError("curl not found")
+    cmd = [
+        curl,
+        "--http1.1",
+        "-fsS",
+        "-m",
+        str(max(3, int(timeout_sec))),
+        "-A",
+        RAPIRA_HEADERS["User-Agent"],
+        "-H",
+        "Accept: application/json",
+        "-H",
+        "Connection: close",
+        RAPIRA_URL,
+    ]
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"curl exit {proc.returncode}: {(stderr or b'').decode(errors='replace')[:200]}"
+        )
+    payload = json.loads(stdout.decode())
+    return _parse_rapira_usdt_rub(payload)
+
 
 async def fetch_rapira_usdt_rub(*, timeout_sec: float = 15.0) -> float:
     """Публичный курс Rapira USDT/RUB (ask/close)."""
-    url = "https://api.rapira.net/open/market/rates"
     timeout = aiohttp.ClientTimeout(total=timeout_sec)
     last_error: Exception | None = None
-    for attempt in range(3):
+    for attempt in range(5):
         try:
             # Новый connector на каждую попытку: иначе после закрытия session
-            # получаем "Session is closed".
+            # получаем "Session is closed". HTTP/1.1 + browser UA стабильнее к Rapira.
             connector = aiohttp.TCPConnector(
-                force_close=True, enable_cleanup_closed=True
+                force_close=True,
+                enable_cleanup_closed=True,
             )
             async with aiohttp.ClientSession(
-                timeout=timeout, connector=connector
+                timeout=timeout,
+                connector=connector,
+                headers=RAPIRA_HEADERS,
+                version=aiohttp.HttpVersion11,
             ) as session:
-                async with session.get(
-                    url, headers={"Accept": "application/json"}
-                ) as resp:
+                async with session.get(RAPIRA_URL, headers=RAPIRA_HEADERS) as resp:
                     resp.raise_for_status()
                     payload = await resp.json(content_type=None)
-
-            items = payload.get("data", payload) if isinstance(payload, dict) else payload
-            if not isinstance(items, list):
-                raise RuntimeError("Rapira: unexpected response shape")
-
-            for row in items:
-                if not isinstance(row, dict):
-                    continue
-                if row.get("symbol") != "USDT/RUB":
-                    continue
-                for key in ("askPrice", "close", "bidPrice"):
-                    value = row.get(key)
-                    if value is None:
-                        continue
-                    rate = float(value)
-                    if rate > 0:
-                        return rate
-            raise RuntimeError("Rapira: USDT/RUB not found")
+            return _parse_rapira_usdt_rub(payload)
         except Exception as exc:
             last_error = exc
-            logger.warning("Rapira attempt %s failed: %s", attempt + 1, exc)
+            logger.warning("Rapira aiohttp attempt %s failed: %s", attempt + 1, exc)
+            await asyncio.sleep(0.4 * (attempt + 1))
+            # После пары сетевых обрывов пробуем curl.
+            if attempt >= 1:
+                try:
+                    rate = await _fetch_rapira_via_curl(timeout_sec=timeout_sec)
+                    logger.info("Rapira fetched via curl fallback")
+                    return rate
+                except Exception as curl_exc:
+                    last_error = curl_exc
+                    logger.warning("Rapira curl fallback failed: %s", curl_exc)
     raise RuntimeError(f"Rapira failed after retries: {last_error}")
 
 

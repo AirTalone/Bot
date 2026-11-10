@@ -31,8 +31,14 @@ async def main() -> int:
     from exchange.rates.sources import fetch_cryptocards_rate, fetch_rapira_usdt_rub
 
     settings = load_settings()
-    rapira = await fetch_rapira_usdt_rub(timeout_sec=settings.rate_timeout_sec)
-    print(f"Rapira: {rapira:.4f}")
+    rapira = None
+    try:
+        rapira = await fetch_rapira_usdt_rub(timeout_sec=settings.rate_timeout_sec)
+        print(f"Rapira: {rapira:.4f}")
+    except Exception as exc:
+        print(f"Rapira FAIL: {exc}")
+        print(f"Rapira fallback: {settings.usdt_rate_rub:.4f}")
+        rapira = settings.usdt_rate_rub
 
     cc = None
     if settings.cryptocards_token or settings.cryptocards_authorization:
@@ -50,7 +56,7 @@ async def main() -> int:
         except Exception as exc:
             print(f"CryptoCards FAIL: {exc}")
     else:
-        cc = round(rapira + 1.5, 4)
+        cc = round(float(rapira) + 1.5, 4)
         print(f"CryptoCards: нет токена в .env — демо CC=Rapira+1.5 → {cc:.4f}")
 
     for label, amount in (

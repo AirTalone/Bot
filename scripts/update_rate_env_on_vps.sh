@@ -45,7 +45,9 @@ if [[ -x .venv/bin/pip ]]; then
 fi
 
 echo "==> smoke_quote"
-.venv/bin/python scripts/smoke_quote.py
+if ! .venv/bin/python scripts/smoke_quote.py; then
+  echo "WARN: smoke_quote упал — всё равно перезапускаю бота"
+fi
 
 echo "==> restart exchange-bot"
 systemctl restart exchange-bot
