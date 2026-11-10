@@ -15,9 +15,13 @@ async def fetch_rapira_usdt_rub(*, timeout_sec: float = 15.0) -> float:
     url = "https://api.rapira.net/open/market/rates"
     timeout = aiohttp.ClientTimeout(total=timeout_sec)
     last_error: Exception | None = None
-    connector = aiohttp.TCPConnector(force_close=True, enable_cleanup_closed=True)
     for attempt in range(3):
         try:
+            # Новый connector на каждую попытку: иначе после закрытия session
+            # получаем "Session is closed".
+            connector = aiohttp.TCPConnector(
+                force_close=True, enable_cleanup_closed=True
+            )
             async with aiohttp.ClientSession(
                 timeout=timeout, connector=connector
             ) as session:
@@ -85,22 +89,55 @@ async def fetch_cryptocards_rate(
     if not api_url:
         raise RuntimeError("CryptoCards API URL is empty")
 
-    headers: dict[str, str] = {"Accept": "application/json"}
-    if authorization:
-        headers["Authorization"] = authorization
-    if cookie:
-        headers["Cookie"] = cookie
+    auth = (authorization or "").strip().strip('"').strip("'")
+    if auth.lower().startswith("authorization:"):
+        auth = auth.split(":", 1)[1].strip()
+    cookie = (cookie or "").strip().strip('"').strip("'")
+    if cookie.lower().startswith("cookie:"):
+        cookie = cookie.split(":", 1)[1].strip()
+
+    auth_candidates: list[str] = []
+    if auth:
+        auth_candidates.append(auth)
+        if not auth.lower().startswith("bearer "):
+            auth_candidates.append(f"Bearer {auth}")
+
+    if not auth_candidates and not cookie:
+        raise RuntimeError("CryptoCards: пустой Authorization/Cookie")
 
     timeout = aiohttp.ClientTimeout(total=timeout_sec)
+    last_status = None
+    last_text = ""
+    payload: Any = None
+
     async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.get(api_url, headers=headers) as resp:
-            text = await resp.text()
-            if resp.status >= 400:
-                raise RuntimeError(f"CryptoCards HTTP {resp.status}: {text[:200]}")
-            try:
-                payload = await resp.json(content_type=None)
-            except Exception as exc:
-                raise RuntimeError(f"CryptoCards: invalid JSON ({exc})") from exc
+        # Сначала пробуем Authorization (как есть и с Bearer), затем Cookie.
+        attempts: list[dict[str, str]] = []
+        for candidate in auth_candidates:
+            attempts.append({"Authorization": candidate})
+        if cookie:
+            attempts.append({"Cookie": cookie})
+        if not attempts:
+            attempts.append({})
+
+        for extra in attempts:
+            headers = {"Accept": "application/json", **extra}
+            async with session.get(api_url, headers=headers) as resp:
+                text = await resp.text()
+                last_status = resp.status
+                last_text = text[:200]
+                if resp.status >= 400:
+                    continue
+                try:
+                    payload = await resp.json(content_type=None)
+                except Exception as exc:
+                    raise RuntimeError(f"CryptoCards: invalid JSON ({exc})") from exc
+                break
+        else:
+            raise RuntimeError(
+                f"CryptoCards HTTP {last_status}: {last_text} "
+                "(проверь CRYPTOCARDS_AUTHORIZATION из Dolphin → account → Headers)"
+            )
 
     rate = _extract_rate_field(payload, rate_field)
     if rate is None:

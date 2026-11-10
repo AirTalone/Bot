@@ -42,13 +42,19 @@ class RateSnapshot:
         lines = [
             f"Режим: <b>{self.mode}</b> ({self.formula})",
             f"Rapira: <b>{rapira}</b> ₽/USDT",
-            f"Bybit Сбер #20 (сейчас): <b>{nth}</b>",
-            f"CryptoCards-логика (среднее за сутки): <b>{cc}</b>"
-            + (f" · семплов: {self.cc_samples_today}" if self.cc_samples_today else ""),
-            f"База: <b>{self.base:.4f}</b>",
-            f"Курс клиенту: <b>{self.client:.4f}</b> ₽/USDT",
-            f"Обновлено: {self.updated_at.strftime('%H:%M:%S UTC')}",
+            f"CryptoCards: <b>{cc}</b> ₽/USDT",
         ]
+        if self.bybit_nth is not None or self.cc_samples_today:
+            lines.append(f"Bybit Сбер #20 (сейчас): <b>{nth}</b>")
+            if self.cc_samples_today:
+                lines.append(f"Семплов CC-логики за сутки: {self.cc_samples_today}")
+        lines.extend(
+            [
+                f"База: <b>{self.base:.4f}</b>",
+                f"Курс клиенту: <b>{self.client:.4f}</b> ₽/USDT",
+                f"Обновлено: {self.updated_at.strftime('%H:%M:%S UTC')}",
+            ]
+        )
         if self.errors:
             lines.append("Ошибки: " + "; ".join(self.errors))
         return "\n".join(lines)

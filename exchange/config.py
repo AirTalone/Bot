@@ -69,8 +69,10 @@ class Settings:
 
 def load_settings() -> Settings:
     db = os.getenv("DATABASE_PATH", "data/exchange.db").strip()
-    auth = os.getenv("CRYPTOCARDS_AUTHORIZATION", "").strip()
-    token = os.getenv("CRYPTOCARDS_TOKEN", "").strip()
+    auth = os.getenv("CRYPTOCARDS_AUTHORIZATION", "").strip().strip('"').strip("'")
+    token = os.getenv("CRYPTOCARDS_TOKEN", "").strip().strip('"').strip("'")
+    if auth.lower().startswith("authorization:"):
+        auth = auth.split(":", 1)[1].strip()
     if not auth and token:
         # Удобный короткий вариант: только токен → Bearer
         auth = token if token.lower().startswith("bearer ") else f"Bearer {token}"
