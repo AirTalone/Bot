@@ -42,6 +42,8 @@ class Settings:
     rate_timeout_sec: float
     cryptocards_api_url: str
     cryptocards_authorization: str
+    cryptocards_token: str  # Local Storage "token" → заголовок x-token
+    cryptocards_ukey: str  # Local Storage "ukey" → заголовок x-ukey
     cryptocards_cookie: str
     cryptocards_rate_field: str
     # Вторая нога курса: bybit_sber20 (логика CC без логина) | api (кабинет CC)
@@ -71,11 +73,12 @@ def load_settings() -> Settings:
     db = os.getenv("DATABASE_PATH", "data/exchange.db").strip()
     auth = os.getenv("CRYPTOCARDS_AUTHORIZATION", "").strip().strip('"').strip("'")
     token = os.getenv("CRYPTOCARDS_TOKEN", "").strip().strip('"').strip("'")
+    ukey = os.getenv("CRYPTOCARDS_UKEY", "").strip().strip('"').strip("'")
     if auth.lower().startswith("authorization:"):
         auth = auth.split(":", 1)[1].strip()
-    if not auth and token:
-        # Удобный короткий вариант: только токен → Bearer
-        auth = token if token.lower().startswith("bearer ") else f"Bearer {token}"
+    # CryptoCards фронт шлёт x-token = localStorage.token (не Authorization Bearer).
+    if not token and auth:
+        token = auth[7:].strip() if auth.lower().startswith("bearer ") else auth
 
     return Settings(
         bot_token=os.getenv("BOT_TOKEN", "").strip(),
@@ -105,6 +108,8 @@ def load_settings() -> Settings:
             "CRYPTOCARDS_API_URL", "https://cryptocards.ws/api/account"
         ).strip(),
         cryptocards_authorization=auth,
+        cryptocards_token=token,
+        cryptocards_ukey=ukey,
         cryptocards_cookie=os.getenv("CRYPTOCARDS_COOKIE", "").strip(),
         cryptocards_rate_field=os.getenv("CRYPTOCARDS_RATE_FIELD", "rate").strip()
         or "rate",

@@ -96,35 +96,37 @@ async def fetch_cryptocards_rate(
     *,
     api_url: str,
     authorization: str = "",
+    token: str = "",
+    ukey: str = "",
     cookie: str = "",
     rate_field: str = "rate",
     timeout_sec: float = 15.0,
 ) -> float:
     """
-    Курс из CryptoCards (обычно GET https://cryptocards.ws/api/account → rate).
+    Курс из CryptoCards (GET https://cryptocards.ws/api/account → rate).
 
-    Нужна авторизация из DevTools → Headers / Local Storage.
+    Фронт CC шлёт заголовки:
+      x-token = localStorage.token
+      x-ukey  = localStorage.ukey
     """
     if not api_url:
         raise RuntimeError("CryptoCards API URL is empty")
 
     auth = _normalize_cc_secret(authorization, prefix_to_strip="authorization:")
+    token = _normalize_cc_secret(token, prefix_to_strip="token:")
+    ukey = _normalize_cc_secret(ukey, prefix_to_strip="ukey:")
     cookie = _normalize_cc_secret(cookie, prefix_to_strip="cookie:")
 
-    token_values: list[str] = []
-    if auth:
-        raw = auth[7:].strip() if auth.lower().startswith("bearer ") else auth
-        for candidate in (auth, raw, f"Bearer {raw}"):
-            if candidate and candidate not in token_values:
-                token_values.append(candidate)
+    if not token and auth:
+        token = auth[7:].strip() if auth.lower().startswith("bearer ") else auth
 
-    if not token_values and not cookie:
-        raise RuntimeError("CryptoCards: пустой Authorization/Cookie")
+    if not token:
+        raise RuntimeError(
+            "CryptoCards: нет token. В Dolphin → Application → Local Storage "
+            "скопируй ключ token в CRYPTOCARDS_TOKEN"
+        )
 
     timeout = aiohttp.ClientTimeout(total=timeout_sec)
-    last_status = None
-    last_text = ""
-    payload: Any = None
     browser_headers = {
         "Accept": "application/json, text/plain, */*",
         "Origin": "https://cryptocards.ws",
@@ -133,50 +135,26 @@ async def fetch_cryptocards_rate(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         ),
+        # Как в их main.*.js
+        "x-token": token,
     }
-
-    attempts: list[dict[str, str]] = []
-    for token in token_values:
-        attempts.append({"Authorization": token})
-        attempts.append({"Authorization": token, "Cookie": cookie} if cookie else {"Authorization": token})
-        attempts.append({"token": token})
-        attempts.append({"x-access-token": token})
-        attempts.append({"x-auth-token": token})
-        if cookie:
-            attempts.append({"token": token, "Cookie": cookie})
+    if ukey:
+        browser_headers["x-ukey"] = ukey
     if cookie:
-        attempts.append({"Cookie": cookie})
-
-    # убрать дубли
-    uniq_attempts: list[dict[str, str]] = []
-    seen: set[tuple[tuple[str, str], ...]] = set()
-    for item in attempts:
-        key = tuple(sorted(item.items()))
-        if key in seen:
-            continue
-        seen.add(key)
-        uniq_attempts.append(item)
+        browser_headers["Cookie"] = cookie
 
     async with aiohttp.ClientSession(timeout=timeout) as session:
-        for extra in uniq_attempts:
-            headers = {**browser_headers, **extra}
-            async with session.get(api_url, headers=headers) as resp:
-                text = await resp.text()
-                last_status = resp.status
-                last_text = text[:200]
-                if resp.status >= 400:
-                    continue
-                try:
-                    payload = await resp.json(content_type=None)
-                except Exception as exc:
-                    raise RuntimeError(f"CryptoCards: invalid JSON ({exc})") from exc
-                break
-        else:
-            raise RuntimeError(
-                f"CryptoCards HTTP {last_status}: {last_text} "
-                "(токен/cookie не приняты; возьми значение из Local Storage "
-                "ещё раз или полный Cookie из Request Headers у account)"
-            )
+        async with session.get(api_url, headers=browser_headers) as resp:
+            text = await resp.text()
+            if resp.status >= 400:
+                raise RuntimeError(
+                    f"CryptoCards HTTP {resp.status}: {text[:200]} "
+                    "(нужны Local Storage: token → CRYPTOCARDS_TOKEN и ukey → CRYPTOCARDS_UKEY)"
+                )
+            try:
+                payload = await resp.json(content_type=None)
+            except Exception as exc:
+                raise RuntimeError(f"CryptoCards: invalid JSON ({exc})") from exc
 
     rate = _extract_rate_field(payload, rate_field)
     if rate is None:

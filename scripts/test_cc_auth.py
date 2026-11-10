@@ -29,12 +29,16 @@ async def main() -> None:
     settings = load_settings()
     print("URL:", settings.cryptocards_api_url)
     print("CC_RATE_SOURCE:", settings.cc_rate_source)
-    _describe_secret(settings.cryptocards_authorization, "Authorization")
+    _describe_secret(settings.cryptocards_token, "x-token (CRYPTOCARDS_TOKEN)")
+    _describe_secret(settings.cryptocards_ukey, "x-ukey (CRYPTOCARDS_UKEY)")
+    _describe_secret(settings.cryptocards_authorization, "Authorization (legacy)")
     _describe_secret(settings.cryptocards_cookie, "Cookie")
     try:
         rate = await fetch_cryptocards_rate(
             api_url=settings.cryptocards_api_url,
             authorization=settings.cryptocards_authorization,
+            token=settings.cryptocards_token,
+            ukey=settings.cryptocards_ukey,
             cookie=settings.cryptocards_cookie,
             rate_field=settings.cryptocards_rate_field,
         )
@@ -42,9 +46,10 @@ async def main() -> None:
     except Exception as exc:
         print("FAIL:", exc)
         print(
-            "Подсказка: в Local Storage скопируй именно VALUE токена "
-            "(не JSON целиком, если там объект). "
-            "Либо в Network у account возьми полный Cookie из Request Headers."
+            "Нужно в Dolphin → F12 → Application → Local Storage:\n"
+            "  token  → CRYPTOCARDS_TOKEN=...\n"
+            "  ukey   → CRYPTOCARDS_UKEY=...\n"
+            "Без слова Bearer. Это не Authorization."
         )
         raise SystemExit(1)
 

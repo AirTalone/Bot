@@ -113,15 +113,21 @@ class RateService:
         source = settings.cc_rate_source
 
         if source == "api":
-            if not (
-                settings.cryptocards_api_url
-                and (settings.cryptocards_authorization or settings.cryptocards_cookie)
-            ):
-                return None, None, 0, "CryptoCards API: нет Authorization/Cookie"
+            if not settings.cryptocards_api_url:
+                return None, None, 0, "CryptoCards API: нет CRYPTOCARDS_API_URL"
+            if not (settings.cryptocards_token or settings.cryptocards_authorization):
+                return (
+                    None,
+                    None,
+                    0,
+                    "CryptoCards API: нет CRYPTOCARDS_TOKEN (Local Storage → token)",
+                )
             try:
                 rate = await fetch_cryptocards_rate(
                     api_url=settings.cryptocards_api_url,
                     authorization=settings.cryptocards_authorization,
+                    token=settings.cryptocards_token,
+                    ukey=settings.cryptocards_ukey,
                     cookie=settings.cryptocards_cookie,
                     rate_field=settings.cryptocards_rate_field,
                     timeout_sec=settings.rate_timeout_sec,

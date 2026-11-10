@@ -37,6 +37,8 @@ def _settings(**overrides) -> Settings:
         rate_timeout_sec=5.0,
         cryptocards_api_url="https://cryptocards.ws/api/account",
         cryptocards_authorization="",
+        cryptocards_token="",
+        cryptocards_ukey="",
         cryptocards_cookie="",
         cryptocards_rate_field="rate",
         cc_rate_source="bybit_sber20",
