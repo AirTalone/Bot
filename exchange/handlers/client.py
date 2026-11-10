@@ -9,7 +9,7 @@ from aiogram.types import CallbackQuery, Message
 
 from exchange.config import Settings
 from exchange.db import Database
-from exchange.keyboards import client_main_kb, client_order_kb
+from exchange.keyboards import client_main_kb, client_order_kb, client_skip_address_kb
 from exchange.rates import RateService
 from exchange.services import OrderError, OrderService
 from exchange.states import ClientCreateOrder, ClientUploadReceipt
@@ -78,10 +78,10 @@ async def process_amount(
         f"Сумма: <b>{amount:.2f} ₽</b>\n"
         f"Курс: <b>{quote.suggested_rate:.4f}</b> ₽/USDT{discount_note}\n"
         f"≈ <b>{usdt:.4f} USDT</b>\n\n"
-        "Пришлите адрес USDT (TRC-20 / как принимаете)\n"
-        "или напишите <b>пропустить</b> / <b>-</b>, если адрес дадите позже "
-        "(через саппорта или кнопкой «Указать кошелёк USDT»).",
+        "Пришлите адрес USDT (TRC-20)\n"
+        "или нажмите «Указать позже».",
         parse_mode="HTML",
+        reply_markup=client_skip_address_kb(),
     )
 
 
@@ -92,11 +92,80 @@ def _is_skip_address(text: str) -> bool:
         "—",
         "пропустить",
         "пропуск",
+        "указать позже",
         "позже",
         "нет",
         "skip",
         "later",
     }
+
+
+async def _finish_create_order(
+    *,
+    state: FSMContext,
+    orders: OrderService,
+    settings: Settings,
+    bot: Bot,
+    user_id: int,
+    username: str | None,
+    amount_rub: float,
+    usdt_address: str,
+    answer,
+) -> None:
+    try:
+        order = await orders.create_order(
+            client_tg_id=user_id,
+            client_username=username,
+            amount_rub=amount_rub,
+            usdt_address=usdt_address,
+        )
+    except OrderError as exc:
+        await answer(str(exc))
+        return
+
+    await state.clear()
+    extra = ""
+    if not order.has_usdt_address:
+        extra = (
+            "\n\nАдрес USDT пока не указан — его можно добавить позже "
+            "кнопкой «Указать кошелёк USDT»."
+        )
+    await answer(
+        "Заявка создана.\n\n"
+        + order.short_card()
+        + "\n\nСаппорт подберёт реквизиты. Обычно это несколько минут."
+        + extra,
+        parse_mode="HTML",
+        reply_markup=client_order_kb(order),
+    )
+    await _notify_staff_new_order(bot, settings, order)
+
+
+@router.callback_query(F.data == "client:skip_address", StateFilter(ClientCreateOrder.address))
+async def skip_address_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+    orders: OrderService,
+    settings: Settings,
+    bot: Bot,
+) -> None:
+    data = await state.get_data()
+    if "amount_rub" not in data:
+        await callback.answer("Сначала введите сумму", show_alert=True)
+        return
+    user = callback.from_user
+    await callback.answer()
+    await _finish_create_order(
+        state=state,
+        orders=orders,
+        settings=settings,
+        bot=bot,
+        user_id=user.id,
+        username=user.username,
+        amount_rub=float(data["amount_rub"]),
+        usdt_address="",
+        answer=callback.message.answer,  # type: ignore[union-attr]
+    )
 
 
 @router.message(ClientCreateOrder.address)
@@ -115,33 +184,17 @@ async def process_address(
     if user is None:
         await message.answer("Не удалось определить пользователя.")
         return
-    try:
-        order = await orders.create_order(
-            client_tg_id=user.id,
-            client_username=user.username,
-            amount_rub=amount,
-            usdt_address=address,
-        )
-    except OrderError as exc:
-        await message.answer(str(exc))
-        return
-
-    await state.clear()
-    extra = ""
-    if not order.has_usdt_address:
-        extra = (
-            "\n\nАдрес USDT пока не указан — его можно добавить позже "
-            "кнопкой «Указать кошелёк USDT» или через саппорта."
-        )
-    await message.answer(
-        "Заявка создана.\n\n"
-        + order.short_card()
-        + "\n\nСаппорт подберёт реквизиты под ваш запрос. Обычно это занимает несколько минут."
-        + extra,
-        parse_mode="HTML",
-        reply_markup=client_order_kb(order),
+    await _finish_create_order(
+        state=state,
+        orders=orders,
+        settings=settings,
+        bot=bot,
+        user_id=user.id,
+        username=user.username,
+        amount_rub=amount,
+        usdt_address=address,
+        answer=message.answer,
     )
-    await _notify_staff_new_order(bot, settings, order)
 
 
 async def _notify_staff_new_order(bot: Bot, settings: Settings, order) -> None:

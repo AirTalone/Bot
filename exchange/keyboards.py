@@ -18,6 +18,19 @@ def client_main_kb() -> ReplyKeyboardMarkup:
     )
 
 
+def client_skip_address_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Указать позже",
+                    callback_data="client:skip_address",
+                )
+            ]
+        ]
+    )
+
+
 def client_order_kb(order: Order) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if order.status == OrderStatus.AWAITING_PAYMENT:
