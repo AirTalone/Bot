@@ -243,6 +243,7 @@ class RateService:
                 self._snapshot = snap
             return snap
 
+        prev = self._snapshot
         rapira: float | None = None
         errors: list[str] = []
 
@@ -251,19 +252,33 @@ class RateService:
         except Exception as exc:
             logger.warning("Rapira rate failed: %s", exc)
             errors.append(f"Rapira: {exc}")
+            # Не откатываемся на USDT_RATE_RUB=90 — держим последний удачный курс.
+            if prev.mode == "auto" and prev.rapira is not None:
+                rapira = prev.rapira
+                errors.append("Rapira: использован предыдущий курс")
 
         cc_avg, nth, samples_count, cc_err = await self._fetch_cc_leg()
         if cc_err:
             logger.warning(cc_err)
             errors.append(cc_err)
+            if cc_avg is None and prev.mode == "auto" and prev.cryptocards is not None:
+                cc_avg = prev.cryptocards
+                samples_count = prev.cc_samples_today
+                errors.append("CryptoCards: использован предыдущий курс")
 
         formula_name = (settings.rate_formula or "spread").lower()
         if formula_name in {"spread", "profit", "margin"}:
+            # Если свежих котировок нет, но в снимке уже был рабочий client — не прыгаем на 90.
+            fallback = (
+                prev.client
+                if prev.mode == "auto" and prev.client > 0
+                else settings.usdt_rate_rub
+            )
             quote = compute_client_quote(
                 amount_rub=0.0,
                 rapira=rapira,
                 cryptocards=cc_avg,
-                fallback_rate=settings.usdt_rate_rub,
+                fallback_rate=fallback,
                 markup_rub=settings.markup_rub_default,
                 cc_edge_percent=settings.cc_edge_percent,
                 tier_30k=settings.amount_tier_30k,
