@@ -14,28 +14,40 @@ async def fetch_rapira_usdt_rub(*, timeout_sec: float = 15.0) -> float:
     """Публичный курс Rapira USDT/RUB (ask/close)."""
     url = "https://api.rapira.net/open/market/rates"
     timeout = aiohttp.ClientTimeout(total=timeout_sec)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.get(url, headers={"Accept": "application/json"}) as resp:
-            resp.raise_for_status()
-            payload = await resp.json(content_type=None)
+    last_error: Exception | None = None
+    connector = aiohttp.TCPConnector(force_close=True, enable_cleanup_closed=True)
+    for attempt in range(3):
+        try:
+            async with aiohttp.ClientSession(
+                timeout=timeout, connector=connector
+            ) as session:
+                async with session.get(
+                    url, headers={"Accept": "application/json"}
+                ) as resp:
+                    resp.raise_for_status()
+                    payload = await resp.json(content_type=None)
 
-    items = payload.get("data", payload) if isinstance(payload, dict) else payload
-    if not isinstance(items, list):
-        raise RuntimeError("Rapira: unexpected response shape")
+            items = payload.get("data", payload) if isinstance(payload, dict) else payload
+            if not isinstance(items, list):
+                raise RuntimeError("Rapira: unexpected response shape")
 
-    for row in items:
-        if not isinstance(row, dict):
-            continue
-        if row.get("symbol") != "USDT/RUB":
-            continue
-        for key in ("askPrice", "close", "bidPrice"):
-            value = row.get(key)
-            if value is None:
-                continue
-            rate = float(value)
-            if rate > 0:
-                return rate
-    raise RuntimeError("Rapira: USDT/RUB not found")
+            for row in items:
+                if not isinstance(row, dict):
+                    continue
+                if row.get("symbol") != "USDT/RUB":
+                    continue
+                for key in ("askPrice", "close", "bidPrice"):
+                    value = row.get(key)
+                    if value is None:
+                        continue
+                    rate = float(value)
+                    if rate > 0:
+                        return rate
+            raise RuntimeError("Rapira: USDT/RUB not found")
+        except Exception as exc:
+            last_error = exc
+            logger.warning("Rapira attempt %s failed: %s", attempt + 1, exc)
+    raise RuntimeError(f"Rapira failed after retries: {last_error}")
 
 
 def _extract_rate_field(payload: Any, field: str = "rate") -> float | None:
