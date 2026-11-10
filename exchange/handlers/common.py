@@ -57,9 +57,10 @@ async def cmd_rate(message: Message, settings: Settings, rates) -> None:
     formula = (settings.rate_formula or "").lower()
     if formula in {"spread", "profit", "margin"}:
         extra = (
-            f"\nCC edge: <b>{settings.cc_edge_percent:.2f}%</b>"
-            f" · цель: <b>{settings.target_margin_percent:.2f}%</b>"
-            f" · good: Rapira+{settings.markup_rub_good:g}"
+            f"\nФормула: <b>Rapira + {settings.markup_rub_default:g}</b>"
+            f" · CC edge: <b>{settings.cc_edge_percent:.2f}%</b>"
+            f"\nМин. маржа: ≤40к <b>{settings.min_margin_percent:.2f}%</b>, "
+            f">40к <b>{settings.min_margin_percent_40k:.2f}%</b>"
         )
     else:
         extra = f"\nСпред: <b>{settings.spread_percent:.2f}%</b>"

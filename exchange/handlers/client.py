@@ -65,11 +65,19 @@ async def process_amount(
             f"Сумма вне лимита {settings.min_amount_rub:.0f}–{settings.max_amount_rub:.0f} ₽"
         )
         return
-    usdt = rates.rub_to_usdt(amount)
+    quote = rates.quote_for_amount(amount)
+    usdt = round(amount / quote.suggested_rate, 6)
     await state.update_data(amount_rub=amount)
     await state.set_state(ClientCreateOrder.address)
+    discount_note = ""
+    if quote.amount_discount_rub > 0:
+        discount_note = (
+            f"\nСкидка по сумме: −{quote.amount_discount_rub:g} к курсу"
+        )
     await message.answer(
-        f"Сумма: <b>{amount:.2f} ₽</b> ≈ <b>{usdt:.4f} USDT</b>\n\n"
+        f"Сумма: <b>{amount:.2f} ₽</b>\n"
+        f"Курс: <b>{quote.suggested_rate:.4f}</b> ₽/USDT{discount_note}\n"
+        f"≈ <b>{usdt:.4f} USDT</b>\n\n"
         "Пришлите адрес USDT (TRC-20 / как принимаете)\n"
         "или напишите <b>пропустить</b> / <b>-</b>, если адрес дадите позже "
         "(через саппорта или кнопкой «Указать кошелёк USDT»).",
@@ -133,17 +141,21 @@ async def process_address(
         parse_mode="HTML",
         reply_markup=client_order_kb(order),
     )
-    await _notify_staff_new_order(bot, settings, order.short_card())
+    await _notify_staff_new_order(bot, settings, order)
 
 
-async def _notify_staff_new_order(bot: Bot, settings: Settings, text: str) -> None:
+async def _notify_staff_new_order(bot: Bot, settings: Settings, order) -> None:
+    from exchange.keyboards import support_order_kb
+
     targets = set(settings.support_ids) | set(settings.admin_ids)
+    text = "🆕 Новая заявка — нужны реквизиты\n\n" + order.short_card(for_support=True)
     for tg_id in targets:
         try:
             await bot.send_message(
                 tg_id,
-                "🆕 Новая заявка — нужны реквизиты\n\n" + text,
+                text,
                 parse_mode="HTML",
+                reply_markup=support_order_kb(order),
             )
         except Exception:
             logger.exception("Failed to notify staff %s", tg_id)

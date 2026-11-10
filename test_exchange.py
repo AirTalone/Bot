@@ -42,10 +42,13 @@ def _settings(**overrides) -> Settings:
         cryptocards_cookie="",
         cryptocards_rate_field="rate",
         cc_edge_percent=2.0,
-        target_margin_percent=1.5,
-        good_gap_percent=0.3,
         markup_rub_default=1.0,
-        markup_rub_good=0.7,
+        amount_tier_30k=30_000.0,
+        amount_tier_40k=40_000.0,
+        amount_discount_30k=0.2,
+        amount_discount_40k=0.3,
+        min_margin_percent=1.0,
+        min_margin_percent_40k=0.5,
         cc_rate_source="bybit_sber20",
         bybit_payment_id="585",
         bybit_side="1",
@@ -103,7 +106,9 @@ class OrderServiceTests(unittest.IsolatedAsyncioTestCase):
             usdt_address="TXxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
         )
         self.assertEqual(order.status, OrderStatus.AWAITING_REQUISITES)
-        self.assertAlmostEqual(order.amount_usdt, 50.0)
+        # static fallback: USDT_RATE_RUB + markup (100 + 1)
+        self.assertAlmostEqual(order.rate, 101.0)
+        self.assertAlmostEqual(order.amount_usdt, round(5000 / 101.0, 6))
 
         order = await self.orders.assign_requisites(
             order,
@@ -240,55 +245,54 @@ class RateCombineTests(unittest.TestCase):
         self.assertAlmostEqual(value, 90.0)
 
 
-class SpreadRateTests(unittest.TestCase):
-    def test_similar_rates_target_margin(self) -> None:
-        """Курсы сошлись → ~1.5% от себестоимости (CC − 2%)."""
-        from exchange.rates.service import compute_spread_rate, margin_percent
+class ClientQuoteTests(unittest.TestCase):
+    def test_rapira_plus_one(self) -> None:
+        from exchange.rates.pricing import compute_client_quote
 
-        base, client, cost, margin, label = compute_spread_rate(
+        q = compute_client_quote(
+            amount_rub=15_000,
+            rapira=79.80,
+            cryptocards=81.50,
+            fallback_rate=90.0,
+        )
+        self.assertAlmostEqual(q.suggested_rate, 80.8)
+        self.assertAlmostEqual(q.effective_cost or 0.0, 81.50 * 0.98)
+        self.assertTrue(q.margin_ok)
+
+    def test_amount_discounts(self) -> None:
+        from exchange.rates.pricing import compute_client_quote
+
+        q30 = compute_client_quote(
+            amount_rub=35_000,
             rapira=80.0,
-            cryptocards=80.0,
-            fallback=90.0,
-            cc_edge_percent=2.0,
-            target_margin_percent=1.5,
+            cryptocards=81.0,
+            fallback_rate=90.0,
         )
-        self.assertAlmostEqual(cost or 0.0, 78.4)
-        self.assertAlmostEqual(client, 78.4 * 1.015)
-        self.assertAlmostEqual(margin or 0.0, 1.5, places=2)
-        self.assertIn("target", label)
-        self.assertAlmostEqual(margin_percent(client, cost or 1.0), 1.5, places=2)
+        self.assertAlmostEqual(q30.suggested_rate, 80.8)  # 81 − 0.2
+        self.assertAlmostEqual(q30.amount_discount_rub, 0.2)
 
-    def test_good_market_rapira_plus_markup(self) -> None:
-        """Rapira чуть выше CC → Rapira + 0.7, суммарно около 3%."""
-        from exchange.rates.service import compute_spread_rate
-
-        # gap = (80.5 - 80) / 80 = 0.625% >= 0.3%
-        base, client, cost, margin, label = compute_spread_rate(
-            rapira=80.5,
-            cryptocards=80.0,
-            fallback=90.0,
-            cc_edge_percent=2.0,
-            target_margin_percent=1.5,
-            good_gap_percent=0.3,
-            markup_rub_good=0.7,
+        q40 = compute_client_quote(
+            amount_rub=50_000,
+            rapira=80.0,
+            cryptocards=81.0,
+            fallback_rate=90.0,
         )
-        self.assertAlmostEqual(client, 81.2)
-        self.assertIn("good", label)
-        # себестоимость 78.4 → маржа (81.2/78.4 - 1)*100 ≈ 3.57%
-        self.assertGreater(margin or 0.0, 3.0)
-        self.assertLess(margin or 0.0, 4.0)
+        self.assertAlmostEqual(q40.suggested_rate, 80.7)  # 81 − 0.3
+        self.assertAlmostEqual(q40.min_margin_percent, 0.5)
 
-    def test_only_rapira_adds_default_markup(self) -> None:
-        from exchange.rates.service import compute_spread_rate
+    def test_reject_wide_gap_margin(self) -> None:
+        """Rapira 78 / CC 83 → Rapira+1 = 79, маржа к CC×0.98 отрицательная."""
+        from exchange.rates.pricing import compute_client_quote
 
-        _, client, _, _, label = compute_spread_rate(
-            rapira=90.0,
-            cryptocards=None,
-            fallback=90.0,
-            markup_rub_default=1.0,
+        q = compute_client_quote(
+            amount_rub=10_000,
+            rapira=78.0,
+            cryptocards=83.0,
+            fallback_rate=90.0,
         )
-        self.assertAlmostEqual(client, 91.0)
-        self.assertIn("rapira+1", label)
+        self.assertAlmostEqual(q.suggested_rate, 79.0)
+        self.assertFalse(q.margin_ok)
+        self.assertLess(q.margin_percent or 0.0, 0.0)
 
 
 class RateSampleTests(unittest.IsolatedAsyncioTestCase):

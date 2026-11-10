@@ -20,6 +20,10 @@ class SupportAssignRequisites(StatesGroup):
     holder = State()
 
 
+class SupportSetRate(StatesGroup):
+    waiting = State()
+
+
 class SupportNote(StatesGroup):
     waiting = State()
 

@@ -134,9 +134,11 @@ class Database:
         amount_usdt: float,
         rate: float,
         usdt_address: str,
+        extra: dict | None = None,
     ) -> Order:
         now = iso(utcnow())
         public_id = _new_public_id()
+        extra_json = json.dumps(extra or {}, ensure_ascii=False)
         for _ in range(5):
             try:
                 cursor = await self.conn.execute(
@@ -144,8 +146,8 @@ class Database:
                     INSERT INTO orders (
                         public_id, client_tg_id, client_username,
                         amount_rub, amount_usdt, rate, usdt_address,
-                        status, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        status, extra_json, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         public_id,
@@ -156,6 +158,7 @@ class Database:
                         rate,
                         usdt_address,
                         OrderStatus.AWAITING_REQUISITES.value,
+                        extra_json,
                         now,
                         now,
                     ),

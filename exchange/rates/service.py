@@ -1,4 +1,4 @@
-"""Сведение курсов Rapira + (CryptoCards-логика через Bybit Сбер #20)."""
+"""Сведение курсов Rapira + CryptoCards и котировка под сумму заявки."""
 
 from __future__ import annotations
 
@@ -10,6 +10,13 @@ from pathlib import Path
 
 from exchange.config import Settings
 from exchange.rates.bybit_p2p import fetch_nth_sber_ad_price
+from exchange.rates.pricing import (
+    RateQuote,
+    combine_rates_legacy,
+    compute_client_quote,
+    effective_cc_cost,
+    margin_percent,
+)
 from exchange.rates.samples import RateSampleStore
 from exchange.rates.sources import fetch_cryptocards_rate, fetch_rapira_usdt_rub
 
@@ -44,7 +51,7 @@ class RateSnapshot:
         lines = [
             f"Режим: <b>{self.mode}</b> ({self.formula})",
             f"Rapira: <b>{rapira}</b> ₽/USDT",
-            f"CryptoCards: <b>{cc}</b> ₽/USDT",
+            f"CryptoCards (закуп): <b>{cc}</b> ₽/USDT",
         ]
         if self.bybit_nth is not None or self.cc_samples_today:
             lines.append(f"Bybit Сбер #20 (сейчас): <b>{nth}</b>")
@@ -54,18 +61,22 @@ class RateSnapshot:
             lines.append(f"Себестоимость (CC − edge): <b>{self.effective_cost:.4f}</b>")
         lines.extend(
             [
-                f"База: <b>{self.base:.4f}</b>",
-                f"Курс клиенту: <b>{self.client:.4f}</b> ₽/USDT",
+                f"База (Rapira+markup, без скидки по сумме): <b>{self.client:.4f}</b>",
+                "Скидки по сумме: >30к и >40к (см. .env)",
             ]
         )
         if self.expected_margin_percent is not None:
-            lines.append(f"Ожидаемая маржа: <b>{self.expected_margin_percent:.2f}%</b>")
+            lines.append(
+                f"Маржа к закупу (на базе без скидки): "
+                f"<b>{self.expected_margin_percent:.2f}%</b>"
+            )
         lines.append(f"Обновлено: {self.updated_at.strftime('%H:%M:%S UTC')}")
         if self.errors:
             lines.append("Ошибки: " + "; ".join(self.errors))
         return "\n".join(lines)
 
 
+# Обратная совместимость для тестов/импортов
 def combine_rates(
     *,
     rapira: float | None,
@@ -73,87 +84,9 @@ def combine_rates(
     formula: str,
     fallback: float,
 ) -> tuple[float, str]:
-    values = [v for v in (rapira, cryptocards) if v is not None and v > 0]
-    if not values:
-        return fallback, "fallback"
-    formula = (formula or "max").lower()
-    if formula == "min":
-        return min(values), "min"
-    if formula in {"avg", "mean", "average"}:
-        return sum(values) / len(values), "avg"
-    return max(values), "max"
-
-
-def effective_cc_cost(cryptocards: float, cc_edge_percent: float) -> float:
-    """Себестоимость 1 USDT с учётом твоего спреда на CryptoCards."""
-    edge = max(0.0, cc_edge_percent) / 100.0
-    return cryptocards * (1.0 - edge)
-
-
-def margin_percent(client_rate: float, cost: float) -> float:
-    if cost <= 0:
-        return 0.0
-    return (client_rate / cost - 1.0) * 100.0
-
-
-def compute_spread_rate(
-    *,
-    rapira: float | None,
-    cryptocards: float | None,
-    fallback: float,
-    cc_edge_percent: float = 2.0,
-    target_margin_percent: float = 1.5,
-    good_gap_percent: float = 0.3,
-    markup_rub_default: float = 1.0,
-    markup_rub_good: float = 0.7,
-) -> tuple[float, float, float | None, float | None, str]:
-    """
-    Курс клиенту под целевую маржу 1–2% с учётом спреда CryptoCards (~2%).
-
-    Логика:
-    - себестоимость = CC × (1 − cc_edge/100)
-    - если Rapira выше CC на good_gap% и больше → «хороший» рынок:
-      клиенту Rapira + markup_good (обычно +0.7 ₽) → суммарно ~3%
-    - если курсы близки / Rapira не выше → целимся в target_margin от себестоимости
-      (в среднем 1–2%), с потолком Rapira + markup_default
-
-    Returns: (base, client, effective_cost, expected_margin_pct, formula_label)
-    """
-    cc = cryptocards if cryptocards is not None and cryptocards > 0 else None
-    rp = rapira if rapira is not None and rapira > 0 else None
-
-    if cc is None and rp is None:
-        return fallback, fallback, None, None, "fallback"
-
-    if cc is None:
-        # Только Rapira: прежняя привычка Rapira + 1 ₽
-        base = rp  # type: ignore[assignment]
-        client = rp + markup_rub_default
-        return base, client, None, None, f"spread:rapira+{markup_rub_default:g}"
-
-    cost = effective_cc_cost(cc, cc_edge_percent)
-    target_client = cost * (1.0 + max(0.0, target_margin_percent) / 100.0)
-
-    if rp is None:
-        return cc, target_client, cost, margin_percent(target_client, cost), (
-            f"spread:target{target_margin_percent:g}%"
-        )
-
-    gap_pct = (rp - cc) / cc * 100.0
-    if gap_pct >= good_gap_percent:
-        # Rapira чуть выше CC → Rapira + 0.7, плюс ~2% с CC ≈ ~3%
-        base = rp
-        client = rp + markup_rub_good
-        label = f"spread:rapira+{markup_rub_good:g} (good)"
-    else:
-        # Курсы сошлись / Rapira не выше: целимся в 1–2% от себестоимости (CC − edge).
-        # Потолок — привычный Rapira + 1 ₽, чтобы не задирать курс выше обычного.
-        base = rp
-        ceiling = rp + markup_rub_default
-        client = min(target_client, ceiling)
-        label = f"spread:target{target_margin_percent:g}%"
-
-    return base, client, cost, margin_percent(client, cost), label
+    return combine_rates_legacy(
+        rapira=rapira, cryptocards=cryptocards, formula=formula, fallback=fallback
+    )
 
 
 class RateService:
@@ -175,13 +108,50 @@ class RateService:
         )
 
     def client_rate(self) -> float:
+        """Базовый курс без скидки по сумме (для /rate и старых вызовов)."""
         return self._snapshot.client
 
     def rub_to_usdt(self, amount_rub: float) -> float:
-        return round(amount_rub / self.client_rate(), 6)
+        quote = self.quote_for_amount(amount_rub)
+        return round(amount_rub / quote.suggested_rate, 6)
 
     def snapshot(self) -> RateSnapshot:
         return self._snapshot
+
+    def quote_for_amount(self, amount_rub: float) -> RateQuote:
+        snap = self._snapshot
+        settings = self.settings
+        if settings.rate_mode != "auto" or snap.mode == "static":
+            # Статический режим: USDT_RATE_RUB (+ spread) с теми же скидками по сумме.
+            base = settings.effective_rate()
+            return compute_client_quote(
+                amount_rub=amount_rub,
+                rapira=base,
+                cryptocards=None,
+                fallback_rate=base,
+                markup_rub=0.0,
+                cc_edge_percent=settings.cc_edge_percent,
+                tier_30k=settings.amount_tier_30k,
+                tier_40k=settings.amount_tier_40k,
+                discount_30k=settings.amount_discount_30k,
+                discount_40k=settings.amount_discount_40k,
+                min_margin_percent=settings.min_margin_percent,
+                min_margin_percent_40k=settings.min_margin_percent_40k,
+            )
+        return compute_client_quote(
+            amount_rub=amount_rub,
+            rapira=snap.rapira,
+            cryptocards=snap.cryptocards,
+            fallback_rate=settings.usdt_rate_rub,
+            markup_rub=settings.markup_rub_default,
+            cc_edge_percent=settings.cc_edge_percent,
+            tier_30k=settings.amount_tier_30k,
+            tier_40k=settings.amount_tier_40k,
+            discount_30k=settings.amount_discount_30k,
+            discount_40k=settings.amount_discount_40k,
+            min_margin_percent=settings.min_margin_percent,
+            min_margin_percent_40k=settings.min_margin_percent_40k,
+        )
 
     async def _fetch_cc_leg(self) -> tuple[float | None, float | None, int, str | None]:
         """
@@ -214,7 +184,6 @@ class RateService:
             except Exception as exc:
                 return None, None, 0, f"CryptoCards API: {exc}"
 
-        # bybit_sber20 — логика саппорта CryptoCards без логина
         try:
             nth = await fetch_nth_sber_ad_price(
                 ad_index=settings.bybit_ad_index,
@@ -224,7 +193,6 @@ class RateService:
                 timeout_sec=settings.rate_timeout_sec,
             )
         except Exception as exc:
-            # Если свежий запрос упал — всё равно отдадим среднее за день, если есть
             err = f"Bybit Сбер#{settings.bybit_ad_index}: {exc}"
             if self.samples is None:
                 return None, None, 0, err
@@ -268,23 +236,27 @@ class RateService:
             logger.warning(cc_err)
             errors.append(cc_err)
 
-        effective_cost: float | None = None
-        expected_margin: float | None = None
         formula_name = (settings.rate_formula or "spread").lower()
-
         if formula_name in {"spread", "profit", "margin"}:
-            base, client, effective_cost, expected_margin, used_formula = (
-                compute_spread_rate(
-                    rapira=rapira,
-                    cryptocards=cc_avg,
-                    fallback=settings.usdt_rate_rub,
-                    cc_edge_percent=settings.cc_edge_percent,
-                    target_margin_percent=settings.target_margin_percent,
-                    good_gap_percent=settings.good_gap_percent,
-                    markup_rub_default=settings.markup_rub_default,
-                    markup_rub_good=settings.markup_rub_good,
-                )
+            quote = compute_client_quote(
+                amount_rub=0.0,
+                rapira=rapira,
+                cryptocards=cc_avg,
+                fallback_rate=settings.usdt_rate_rub,
+                markup_rub=settings.markup_rub_default,
+                cc_edge_percent=settings.cc_edge_percent,
+                tier_30k=settings.amount_tier_30k,
+                tier_40k=settings.amount_tier_40k,
+                discount_30k=settings.amount_discount_30k,
+                discount_40k=settings.amount_discount_40k,
+                min_margin_percent=settings.min_margin_percent,
+                min_margin_percent_40k=settings.min_margin_percent_40k,
             )
+            base = quote.rapira if quote.rapira is not None else quote.suggested_rate
+            client = quote.suggested_rate
+            used_formula = quote.formula
+            effective_cost = quote.effective_cost
+            expected_margin = quote.margin_percent
         else:
             base, used_formula = combine_rates(
                 rapira=rapira,
@@ -293,6 +265,8 @@ class RateService:
                 fallback=settings.usdt_rate_rub,
             )
             client = base * (1.0 + settings.spread_percent / 100.0)
+            effective_cost = None
+            expected_margin = None
             if cc_avg is not None and cc_avg > 0:
                 effective_cost = effective_cc_cost(cc_avg, settings.cc_edge_percent)
                 expected_margin = margin_percent(client, effective_cost)

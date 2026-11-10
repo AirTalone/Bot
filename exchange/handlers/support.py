@@ -12,7 +12,7 @@ from exchange.db import Database
 from exchange.keyboards import client_order_kb, support_home_kb, support_order_kb
 from exchange.models import Requisites
 from exchange.services import OrderError, OrderService
-from exchange.states import SupportAssignRequisites, SupportNote
+from exchange.states import SupportAssignRequisites, SupportNote, SupportSetRate
 from exchange.statuses import SUPPORT_QUEUES
 
 logger = logging.getLogger(__name__)
@@ -54,10 +54,106 @@ async def support_queue(
     await callback.message.answer(f"Очередь «{key}»: {len(items)}")  # type: ignore[union-attr]
     for order in items:
         await callback.message.answer(  # type: ignore[union-attr]
-            order.short_card(),
+            order.short_card(for_support=True),
             parse_mode="HTML",
             reply_markup=support_order_kb(order),
         )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("support:rate:"))
+async def support_rate_start(
+    callback: CallbackQuery, state: FSMContext, settings: Settings, db: Database
+) -> None:
+    if not _require_support(settings, callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    order_id = int(callback.data.split(":")[-1])  # type: ignore[union-attr]
+    order = await db.get_order_by_id(order_id)
+    if order is None:
+        await callback.answer("Не найдено", show_alert=True)
+        return
+    await state.set_state(SupportSetRate.waiting)
+    await state.update_data(rate_order_id=order.id)
+    await callback.message.answer(  # type: ignore[union-attr]
+        order.short_card(for_support=True)
+        + "\n\nВведите итоговый курс числом (например <code>80.8</code>):",
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.message(SupportSetRate.waiting)
+async def support_rate_finish(
+    message: Message,
+    state: FSMContext,
+    settings: Settings,
+    orders: OrderService,
+    db: Database,
+    bot: Bot,
+) -> None:
+    if message.from_user is None or not _require_support(settings, message.from_user.id):
+        await state.clear()
+        return
+    raw = (message.text or "").strip().replace(",", ".")
+    try:
+        rate = float(raw)
+    except ValueError:
+        await message.answer("Нужно число, например 80.8")
+        return
+    data = await state.get_data()
+    order = await db.get_order_by_id(int(data["rate_order_id"]))
+    if order is None:
+        await state.clear()
+        await message.answer("Заявка исчезла.")
+        return
+    try:
+        order = await orders.set_client_rate(
+            order, rate=rate, support_tg_id=message.from_user.id
+        )
+    except OrderError as exc:
+        await message.answer(str(exc))
+        await state.clear()
+        return
+    await state.clear()
+    await message.answer(
+        "Курс обновлён.\n\n" + order.short_card(for_support=True),
+        parse_mode="HTML",
+        reply_markup=support_order_kb(order),
+    )
+    try:
+        await bot.send_message(
+            order.client_tg_id,
+            f"Курс по заявке <b>{order.public_id}</b> обновлён: "
+            f"<b>{order.rate:.4f}</b> ₽/USDT\n"
+            f"К выплате: <b>{order.amount_usdt:.4f} USDT</b>",
+            parse_mode="HTML",
+            reply_markup=client_order_kb(order),
+        )
+    except Exception:
+        logger.exception("Failed to notify client about rate change")
+
+
+@router.callback_query(F.data.startswith("support:reject_margin:"))
+async def support_reject_margin(
+    callback: CallbackQuery, state: FSMContext, settings: Settings, db: Database
+) -> None:
+    if not _require_support(settings, callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    order_id = int(callback.data.split(":")[-1])  # type: ignore[union-attr]
+    order = await db.get_order_by_id(order_id)
+    if order is None:
+        await callback.answer("Не найдено", show_alert=True)
+        return
+    await state.set_state(SupportNote.waiting)
+    await state.update_data(note_order_id=order.id, note_action="cancel")
+    await callback.message.answer(  # type: ignore[union-attr]
+        order.short_card(for_support=True)
+        + "\n\nОтклонение по марже. Укажите причину для клиента "
+        "(или «слабая маржа»):",
+        parse_mode="HTML",
+    )
     await callback.answer()
 
 
@@ -73,10 +169,18 @@ async def support_req_start(
     if order is None:
         await callback.answer("Не найдено", show_alert=True)
         return
+    warn = ""
+    if (order.extra or {}).get("margin_ok") is False:
+        warn = (
+            "\n\n⚠️ Маржа ниже минимума. Ты всё равно берёшь сделку — "
+            "проверь курс перед выдачей реквизитов."
+        )
     await state.set_state(SupportAssignRequisites.bank)
     await state.update_data(req_order_id=order.id)
     await callback.message.answer(  # type: ignore[union-attr]
-        f"Выдача реквизитов для <b>{order.public_id}</b> "
+        order.short_card(for_support=True)
+        + warn
+        + f"\n\nВыдача реквизитов для <b>{order.public_id}</b> "
         f"({order.amount_rub:.2f} ₽).\n"
         f"1/3 — название банка (как на площадке):",
         parse_mode="HTML",
@@ -139,7 +243,7 @@ async def support_req_finish(
 
     await state.clear()
     await message.answer(
-        "Реквизиты выданы клиенту.\n\n" + order.short_card(),
+        "Реквизиты выданы клиенту.\n\n" + order.short_card(for_support=True),
         parse_mode="HTML",
         reply_markup=support_order_kb(order),
     )
@@ -195,7 +299,7 @@ async def support_approve(
         return
 
     await callback.message.answer(  # type: ignore[union-attr]
-        "Одобрено → очередь выплаты админу.\n\n" + order.short_card(),
+        "Одобрено → очередь выплаты админу.\n\n" + order.short_card(for_support=True),
         parse_mode="HTML",
         reply_markup=support_order_kb(order),
     )
@@ -213,7 +317,7 @@ async def support_approve(
         try:
             await bot.send_message(
                 admin_id,
-                "💸 Нужна выплата USDT\n\n" + order.short_card(),
+                "💸 Нужна выплата USDT\n\n" + order.short_card(for_support=True),
                 parse_mode="HTML",
             )
         except Exception:
@@ -263,7 +367,8 @@ async def support_repay(
         await callback.answer(str(exc), show_alert=True)
         return
     await callback.message.answer(  # type: ignore[union-attr]
-        "Клиенту запрошена повторная оплата/чек.\n\n" + order.short_card(),
+        "Клиенту запрошена повторная оплата/чек.\n\n"
+        + order.short_card(for_support=True),
         parse_mode="HTML",
         reply_markup=support_order_kb(order),
     )
@@ -340,7 +445,11 @@ async def support_note_finish(
         return
 
     await state.clear()
-    await message.answer(order.short_card(), parse_mode="HTML", reply_markup=support_order_kb(order))
+    await message.answer(
+        order.short_card(for_support=True),
+        parse_mode="HTML",
+        reply_markup=support_order_kb(order),
+    )
     try:
         await bot.send_message(order.client_tg_id, client_msg, parse_mode="HTML")
     except Exception:

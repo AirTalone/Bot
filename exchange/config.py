@@ -46,12 +46,15 @@ class Settings:
     cryptocards_ukey: str  # Local Storage "ukey" → заголовок x-ukey
     cryptocards_cookie: str
     cryptocards_rate_field: str
-    # Формула spread: спред CryptoCards + целевая маржа + наценки ₽
-    cc_edge_percent: float  # твой спред на CC (обычно до 2%)
-    target_margin_percent: float  # цель прибыли, когда курсы близки (1–2%)
-    good_gap_percent: float  # Rapira выше CC на столько % → «хороший» рынок
-    markup_rub_default: float  # Rapira + N ₽ в обычном режиме
-    markup_rub_good: float  # Rapira + N ₽ когда рынок хороший
+    # Формула spread: клиенту Rapira+markup, CC = закуп (макс. чистый доход = edge)
+    cc_edge_percent: float  # макс. чистый доход с CryptoCards, %
+    markup_rub_default: float  # черновик курса: Rapira + N ₽
+    amount_tier_30k: float
+    amount_tier_40k: float
+    amount_discount_30k: float  # −N ₽ к курсу при сумме > 30к
+    amount_discount_40k: float  # −N ₽ к курсу при сумме > 40к
+    min_margin_percent: float  # мин. маржа при сумме ≤ 40к
+    min_margin_percent_40k: float  # мин. маржа при сумме > 40к
     # Вторая нога курса: bybit_sber20 (логика CC без логина) | api (кабинет CC)
     cc_rate_source: str
     bybit_payment_id: str
@@ -120,10 +123,13 @@ def load_settings() -> Settings:
         cryptocards_rate_field=os.getenv("CRYPTOCARDS_RATE_FIELD", "rate").strip()
         or "rate",
         cc_edge_percent=float(os.getenv("CC_EDGE_PERCENT", "2")),
-        target_margin_percent=float(os.getenv("TARGET_MARGIN_PERCENT", "1.5")),
-        good_gap_percent=float(os.getenv("GOOD_GAP_PERCENT", "0.3")),
         markup_rub_default=float(os.getenv("MARKUP_RUB_DEFAULT", "1")),
-        markup_rub_good=float(os.getenv("MARKUP_RUB_GOOD", "0.7")),
+        amount_tier_30k=float(os.getenv("AMOUNT_TIER_30K", "30000")),
+        amount_tier_40k=float(os.getenv("AMOUNT_TIER_40K", "40000")),
+        amount_discount_30k=float(os.getenv("AMOUNT_DISCOUNT_30K", "0.2")),
+        amount_discount_40k=float(os.getenv("AMOUNT_DISCOUNT_40K", "0.3")),
+        min_margin_percent=float(os.getenv("MIN_MARGIN_PERCENT", "1")),
+        min_margin_percent_40k=float(os.getenv("MIN_MARGIN_PERCENT_40K", "0.5")),
         cc_rate_source=os.getenv("CC_RATE_SOURCE", "bybit_sber20").strip().lower(),
         bybit_payment_id=os.getenv("BYBIT_PAYMENT_ID", "585").strip() or "585",
         bybit_side=os.getenv("BYBIT_SIDE", "1").strip() or "1",

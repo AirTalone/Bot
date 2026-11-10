@@ -51,13 +51,15 @@ review
 
 ## Курс (формула `spread`)
 
-По умолчанию `RATE_FORMULA=spread`:
+По умолчанию `RATE_FORMULA=spread` (логика из опроса):
 
-1. Себестоимость = курс CryptoCards × (1 − `CC_EDGE_PERCENT`/100). Обычно edge ≈ 2%.
-2. Если Rapira выше CryptoCards на `GOOD_GAP_PERCENT`% и более → курс клиенту = **Rapira + `MARKUP_RUB_GOOD`** (по умолчанию +0.7 ₽). Вместе с edge CC это даёт около **~3%**.
-3. Если курсы близки → курс от себестоимости с **`TARGET_MARGIN_PERCENT`** (по умолчанию 1.5%, диапазон 1–2%). Потолок — Rapira + `MARKUP_RUB_DEFAULT` (+1 ₽).
+1. Клиенту база всегда **Rapira**. Черновик курса: **Rapira + `MARKUP_RUB_DEFAULT`** (обычно +1 ₽).
+2. Скидка по сумме: **>30к → −0.2**, **>40к → −0.3** к курсу.
+3. CryptoCards — **только закуп**. Себестоимость = CC × (1 − `CC_EDGE_PERCENT`/100), макс. чистый доход с CC ≈ 2%.
+4. Мин. маржа к себестоимости: **≤40к → 1%**, **>40к → 0.5%**. Если ниже — заявка всё равно создаётся, саппорт видит ⚠️ и решает: изменить курс / взять / отклонить.
+5. Саппорт может нажать **«Изменить курс»** и поставить итоговое «красивое» значение.
 
-Параметры в `.env`: `CC_EDGE_PERCENT`, `TARGET_MARGIN_PERCENT`, `GOOD_GAP_PERCENT`, `MARKUP_RUB_DEFAULT`, `MARKUP_RUB_GOOD`.
+Параметры: `MARKUP_RUB_DEFAULT`, `CC_EDGE_PERCENT`, `AMOUNT_TIER_*`, `AMOUNT_DISCOUNT_*`, `MIN_MARGIN_PERCENT*`.
 
 ## Быстрый старт
 

@@ -106,12 +106,39 @@ def support_home_kb() -> InlineKeyboardMarkup:
 def support_order_kb(order: Order) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     oid = order.id
-    if order.status == OrderStatus.AWAITING_REQUISITES:
+    if order.status in {
+        OrderStatus.AWAITING_REQUISITES,
+        OrderStatus.AWAITING_PAYMENT,
+        OrderStatus.RECEIPT_REJECTED,
+        OrderStatus.AWAITING_SUPPORT_REVIEW,
+        OrderStatus.DISPUTED,
+    }:
         rows.append(
             [
                 InlineKeyboardButton(
-                    text="Выдать реквизиты",
+                    text="Изменить курс",
+                    callback_data=f"support:rate:{oid}",
+                )
+            ]
+        )
+    if order.status == OrderStatus.AWAITING_REQUISITES:
+        margin_ok = (order.extra or {}).get("margin_ok")
+        take_label = "Взять · выдать реквизиты"
+        if margin_ok is False:
+            take_label = "Взять всё равно · реквизиты"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=take_label,
                     callback_data=f"support:req:{oid}",
+                )
+            ]
+        )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="Отклонить по марже",
+                    callback_data=f"support:reject_margin:{oid}",
                 )
             ]
         )

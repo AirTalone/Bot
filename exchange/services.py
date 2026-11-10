@@ -10,6 +10,7 @@ from exchange.config import Settings
 from exchange.db import Database
 from exchange.models import Order, Requisites, iso, utcnow
 from exchange.rates import RateService
+from exchange.rates.pricing import compute_client_quote, reevaluate_margin
 from exchange.receipt.base import ReceiptCheckResult, ReceiptChecker
 from exchange.statuses import OrderStatus, can_transition
 
@@ -27,15 +28,23 @@ class OrderService:
     receipt_checker: ReceiptChecker
     rates: RateService | None = None
 
-    def _client_rate(self) -> float:
+    def _quote_for_amount(self, amount_rub: float):
         if self.rates is not None:
-            return self.rates.client_rate()
-        return self.settings.effective_rate()
-
-    def _rub_to_usdt(self, amount_rub: float) -> float:
-        if self.rates is not None:
-            return self.rates.rub_to_usdt(amount_rub)
-        return self.settings.rub_to_usdt(amount_rub)
+            return self.rates.quote_for_amount(amount_rub)
+        return compute_client_quote(
+            amount_rub=amount_rub,
+            rapira=self.settings.usdt_rate_rub,
+            cryptocards=None,
+            fallback_rate=self.settings.effective_rate(),
+            markup_rub=self.settings.markup_rub_default,
+            cc_edge_percent=self.settings.cc_edge_percent,
+            tier_30k=self.settings.amount_tier_30k,
+            tier_40k=self.settings.amount_tier_40k,
+            discount_30k=self.settings.amount_discount_30k,
+            discount_40k=self.settings.amount_discount_40k,
+            min_margin_percent=self.settings.min_margin_percent,
+            min_margin_percent_40k=self.settings.min_margin_percent_40k,
+        )
 
     async def create_order(
         self,
@@ -65,8 +74,9 @@ class OrderService:
                 f"({active.status_label}). Дождитесь завершения или отмените её."
             )
 
-        rate = self._client_rate()
-        amount_usdt = self._rub_to_usdt(amount_rub)
+        quote = self._quote_for_amount(amount_rub)
+        rate = quote.suggested_rate
+        amount_usdt = round(amount_rub / rate, 6)
         return await self.db.create_order(
             client_tg_id=client_tg_id,
             client_username=client_username,
@@ -74,6 +84,55 @@ class OrderService:
             amount_usdt=amount_usdt,
             rate=rate,
             usdt_address=address,
+            extra=quote.to_extra(),
+        )
+
+    async def set_client_rate(
+        self,
+        order: Order,
+        *,
+        rate: float,
+        support_tg_id: int,
+    ) -> Order:
+        """Саппорт ставит итоговый курс до выдачи реквизитов (или пока заявка жива)."""
+        if order.status in {OrderStatus.COMPLETED, OrderStatus.CANCELLED}:
+            raise OrderError("Нельзя менять курс у закрытой заявки")
+        if rate <= 0:
+            raise OrderError("Курс должен быть > 0")
+
+        amount_usdt = round(order.amount_rub / rate, 6)
+        extra = dict(order.extra or {})
+        cc = extra.get("cryptocards")
+        try:
+            cc_f = float(cc) if cc is not None else None
+        except (TypeError, ValueError):
+            cc_f = None
+        cost, margin, min_m, margin_ok = reevaluate_margin(
+            client_rate=rate,
+            cryptocards=cc_f,
+            amount_rub=order.amount_rub,
+            cc_edge_percent=self.settings.cc_edge_percent,
+            tier_40k=self.settings.amount_tier_40k,
+            min_margin_percent=self.settings.min_margin_percent,
+            min_margin_percent_40k=self.settings.min_margin_percent_40k,
+        )
+        extra.update(
+            {
+                "effective_cost": round(cost, 4) if cost is not None else extra.get(
+                    "effective_cost"
+                ),
+                "margin_percent": round(margin, 4) if margin is not None else None,
+                "min_margin_percent": min_m,
+                "margin_ok": margin_ok,
+                "rate_set_by": support_tg_id,
+                "final_rate": rate,
+            }
+        )
+        return await self.db.update_fields(
+            order.id,
+            rate=rate,
+            amount_usdt=amount_usdt,
+            extra=extra,
         )
 
     async def set_usdt_address(self, order: Order, *, usdt_address: str) -> Order:
