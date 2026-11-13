@@ -22,6 +22,7 @@ def _settings(**overrides) -> Settings:
         admin_ids=frozenset({1}),
         support_ids=frozenset({2}),
         staff_chat_id=None,
+        support_contact="Georgina771",
         usdt_rate_rub=100.0,
         spread_percent=0.0,
         min_amount_rub=1000.0,
@@ -349,6 +350,20 @@ class UsdtRoundingTests(unittest.TestCase):
         self.assertEqual(fmt_usdt(229.2789), "229.3")
         self.assertEqual(fmt_usdt(229.2449), "229.24")
         self.assertEqual(fmt_usdt(229.0), "229")
+
+
+class SupportHelpTests(unittest.TestCase):
+    def test_help_text_and_button(self) -> None:
+        from exchange.handlers.common import help_text
+        from exchange.keyboards import support_contact_kb
+
+        s = _settings(payment_ttl_minutes=20)
+        text = help_text(s)
+        self.assertIn("20 минут", text)
+        self.assertIn("@Georgina771", text)
+        kb = support_contact_kb(s.support_contact)
+        self.assertEqual(kb.inline_keyboard[0][0].url, "https://t.me/Georgina771")
+        self.assertIsNone(support_contact_kb(""))
 
 
 class ClientCardTests(unittest.TestCase):

@@ -30,6 +30,8 @@ class Settings:
     support_ids: frozenset[int]
     # Рабочая группа сотрудников: туда приходят карточки заявок. None — по-старому, в личку.
     staff_chat_id: int | None
+    # Юзернейм оператора поддержки для клиентов (без @)
+    support_contact: str
     usdt_rate_rub: float
     spread_percent: float
     min_amount_rub: float
@@ -102,6 +104,7 @@ def load_settings() -> Settings:
         admin_ids=_parse_id_set(os.getenv("ADMIN_IDS", "")),
         support_ids=_parse_id_set(os.getenv("SUPPORT_IDS", "")),
         staff_chat_id=_parse_optional_int(os.getenv("STAFF_CHAT_ID", "")),
+        support_contact=os.getenv("SUPPORT_CONTACT", "Georgina771").strip().lstrip("@"),
         usdt_rate_rub=float(os.getenv("USDT_RATE_RUB", "90")),
         spread_percent=float(os.getenv("SPREAD_PERCENT", "2")),
         min_amount_rub=float(os.getenv("MIN_AMOUNT_RUB", "3000")),

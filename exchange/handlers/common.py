@@ -7,19 +7,24 @@ from aiogram.types import Message
 
 from exchange.client_card import fmt_rub
 from exchange.config import Settings
-from exchange.keyboards import client_main_kb
+from exchange.keyboards import SUPPORT_BUTTON_TEXT, client_main_kb, support_contact_kb
 
 router = Router(name="common")
 
-HELP_TEXT = (
-    "Это бот обмена <b>RUB → USDT</b>.\n\n"
-    "Как это работает:\n"
-    "1) Создаёте заявку (сумма; адрес USDT можно указать сразу или позже)\n"
-    "2) Саппорт подбирает реквизиты под вашу сумму\n"
-    "3) Оплачиваете и загружаете чек (PDF/фото)\n"
-    "4) Чек проходит автопроверку, затем саппорт подтверждает\n"
-    "5) Администратор отправляет USDT на ваш адрес"
-)
+def help_text(settings: Settings) -> str:
+    """Экран «Поддержка»: частые вопросы + контакт оператора."""
+    faq = (
+        "Сколько ждать реквизиты?\n"
+        "Обычно несколько минут.\n\n"
+        "Сколько времени на оплату?\n"
+        f"{settings.payment_ttl_minutes} минут после выдачи реквизитов.\n\n"
+        "Когда придут USDT?\n"
+        "После того, как оператор подтвердит оплату."
+    )
+    text = f"💬 <b>Помощь</b>\n\n<blockquote>{faq}</blockquote>"
+    if settings.support_contact:
+        text += f"\n\nНе нашли ответ? Напишите оператору: @{settings.support_contact}"
+    return text
 
 
 def welcome_text(settings: Settings, user_id: int | None, rates=None) -> str:
@@ -67,9 +72,14 @@ async def cmd_start(message: Message, settings: Settings, rates) -> None:
 
 
 @router.message(Command("help"))
-@router.message(F.text == "Помощь")
-async def cmd_help(message: Message) -> None:
-    await message.answer(HELP_TEXT, parse_mode="HTML", reply_markup=client_main_kb())
+@router.message(F.text == SUPPORT_BUTTON_TEXT)
+@router.message(F.text == "Помощь")  # старая кнопка у тех, у кого не обновилось меню
+async def cmd_help(message: Message, settings: Settings) -> None:
+    await message.answer(
+        help_text(settings),
+        parse_mode="HTML",
+        reply_markup=support_contact_kb(settings.support_contact),
+    )
 
 
 @router.message(Command("rate"))

@@ -6,12 +6,30 @@ from exchange.models import Order
 from exchange.statuses import OrderStatus
 
 
+SUPPORT_BUTTON_TEXT = "💬 Поддержка"
+
+
+def support_contact_kb(username: str) -> InlineKeyboardMarkup | None:
+    """Кнопка-ссылка на чат с оператором поддержки."""
+    if not username:
+        return None
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="💬 Написать в поддержку", url=f"https://t.me/{username}"
+                )
+            ]
+        ]
+    )
+
+
 def client_main_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="Обменять RUB → USDT"), KeyboardButton(text="Меню")],
             [KeyboardButton(text="Мои заявки"), KeyboardButton(text="Курс")],
-            [KeyboardButton(text="Помощь")],
+            [KeyboardButton(text=SUPPORT_BUTTON_TEXT)],
         ],
         resize_keyboard=True,
         is_persistent=True,
