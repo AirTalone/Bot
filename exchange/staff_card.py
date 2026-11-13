@@ -170,7 +170,8 @@ def staff_card(
     lines = [
         f"{icon} <b>{order.public_id} — {title}</b>",
         DIVIDER,
-        f"👤 Клиент: {user}",
+        f"👤 Клиент: {user}"
+        + (" · ⭐ доверенный" if (order.extra or {}).get("video_required") is False else ""),
         f"💸 {fmt_rub(order.amount_rub)} ₽ → <b>{order.usdt_exact} USDT</b>",
         _rate_line(order),
         *_margin_lines(order),
@@ -189,6 +190,13 @@ def staff_card(
     receipt = _receipt_line(order)
     if receipt:
         lines.append(receipt)
+    extra = order.extra or {}
+    if extra.get("payment_video_file_id"):
+        lines.append("🎥 Видео перевода: есть")
+    elif extra.get("no_video") and extra.get("video_required") is not False:
+        lines.append("🎥 Видео: ⚠️ клиент не может прислать — направлен к оператору")
+    elif order.receipt_file_id and extra.get("video_required") is False:
+        lines.append("🎥 Видео: не нужно (доверенный клиент)")
     if order.payout_txid:
         lines.append(f"🔗 TxID: <code>{escape(order.payout_txid)}</code>")
     if order.cancel_reason and order.status in {OrderStatus.CANCELLED, OrderStatus.EXPIRED}:

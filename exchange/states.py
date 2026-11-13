@@ -7,7 +7,8 @@ class ClientCreateOrder(StatesGroup):
 
 
 class ClientUploadReceipt(StatesGroup):
-    waiting_file = State()
+    waiting_file = State()  # чек PDF
+    waiting_video = State()  # видео перевода (не нужно доверенным клиентам)
 
 
 class SetUsdtAddress(StatesGroup):

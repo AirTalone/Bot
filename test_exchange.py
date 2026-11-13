@@ -833,5 +833,232 @@ class PaymentDeadlineTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(left, 30, delta=0.2)
 
 
+class PdfVideoTrustedTests(unittest.IsolatedAsyncioTestCase):
+    """Чек только PDF; видео перевода; доверенным клиентам видео не нужно."""
+
+    async def asyncSetUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        db_path = Path(self.tmp.name) / "t.db"
+        self.db = Database(db_path)
+        await self.db.connect()
+        self.orders = OrderService(
+            db=self.db,
+            settings=_settings(database_path=db_path),
+            receipt_checker=MockReceiptChecker(),
+        )
+
+    async def asyncTearDown(self) -> None:
+        await self.db.close()
+        self.tmp.cleanup()
+
+    async def _paid_order(self, client_id: int):
+        order = await self.orders.create_order(
+            client_tg_id=client_id, client_username="c", amount_rub=5000, usdt_address="",
+        )
+        return await self.orders.assign_requisites(
+            order, support_tg_id=2, requisites=Requisites(bank="Сбер", detail="+7900")
+        )
+
+    async def test_new_client_needs_video_and_it_is_stored(self) -> None:
+        from exchange.client_card import client_card
+        from exchange.keyboards import support_order_kb
+        from exchange.staff_card import staff_card
+
+        order = await self._paid_order(30)
+        self.assertTrue(order.extra["video_required"])
+        self.assertIn("запись экрана", client_card(order))
+        self.assertNotIn("скриншот", client_card(order))
+        order, _ = await self.orders.submit_receipt(
+            order, file_id="pdf", file_unique_id="u", file_bytes=b"ok",
+            filename="check.pdf", mime_type="application/pdf",
+            video_file_id="vid", video_kind="video",
+        )
+        self.assertEqual(order.extra["payment_video_file_id"], "vid")
+        self.assertIn("🎥 Видео перевода: есть", staff_card(order))
+        data = [b.callback_data for row in support_order_kb(order).inline_keyboard for b in row]
+        self.assertIn(f"support:video:{order.id}", data)
+        self.assertIn(f"staff:trust:{order.id}", data)
+
+    async def test_trusted_client_skips_video(self) -> None:
+        from exchange.client_card import client_card
+        from exchange.keyboards import support_order_kb
+        from exchange.staff_card import staff_card
+
+        # Отметили доверенным по прошлой заявке — активная тоже обновилась
+        first = await self._paid_order(31)
+        first = await self.orders.set_client_trusted(first, trusted=True, by_tg_id=2)
+        self.assertFalse(first.extra["video_required"])
+        self.assertTrue(await self.db.is_trusted(31))
+        self.assertNotIn("запись экрана", client_card(first))
+        self.assertIn("⭐ доверенный", staff_card(first))
+        data = [b.callback_data for row in support_order_kb(first).inline_keyboard for b in row]
+        self.assertIn(f"staff:untrust:{first.id}", data)
+
+        # Новая заявка доверенного — сразу без видео
+        await self.orders.cancel(first, reason="тест")
+        second = await self._paid_order(31)
+        self.assertFalse(second.extra["video_required"])
+
+        # Убрали из доверенных — снова нужно видео
+        second = await self.orders.set_client_trusted(second, trusted=False, by_tg_id=2)
+        self.assertTrue(second.extra["video_required"])
+        self.assertFalse(await self.db.is_trusted(31))
+
+    def test_help_has_no_screenshot(self) -> None:
+        from exchange.handlers.common import help_text
+
+        text = help_text(_settings())
+        self.assertNotIn("скриншот", text.lower())
+        self.assertIn("PDF", text)
+        self.assertIn("видео перевода", text)
+
+    def test_pdf_detection(self) -> None:
+        from types import SimpleNamespace
+
+        from exchange.handlers.client import _is_pdf
+
+        self.assertTrue(_is_pdf(SimpleNamespace(mime_type="application/pdf", file_name="a")))
+        self.assertTrue(_is_pdf(SimpleNamespace(mime_type=None, file_name="Чек.PDF")))
+        self.assertFalse(_is_pdf(SimpleNamespace(mime_type="image/jpeg", file_name="a.jpg")))
+
+
+class ReceiptFlowIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    """
+    Сквозной сценарий через диспетчер бота (Telegram подменён):
+    «Я оплатил» → PDF → видео / «Нет видео».
+    """
+
+    async def asyncSetUp(self) -> None:
+        from datetime import datetime, timezone
+
+        from aiogram import Bot, Dispatcher
+        from aiogram.client.session.base import BaseSession
+        from aiogram.fsm.storage.memory import MemoryStorage
+        from aiogram.methods import GetFile, GetMe, SendMessage
+        from aiogram.types import Chat, File, Message, User
+
+        from exchange.context import AppContext, ContextMiddleware
+        from exchange.handlers import setup_routers
+        from exchange.rates import RateService
+        from exchange.staff_panel import StaffPanel
+
+        sent = self.sent = []
+
+        class FakeSession(BaseSession):
+            async def make_request(self, bot, method, timeout=None):
+                if isinstance(method, SendMessage):
+                    sent.append(method.text)
+                    return Message(
+                        message_id=len(sent), date=datetime.now(timezone.utc),
+                        chat=Chat(id=method.chat_id, type="private"), text=method.text,
+                    )
+                if isinstance(method, GetMe):
+                    return User(id=999, is_bot=True, first_name="bot", username="testbot")
+                if isinstance(method, GetFile):
+                    return File(file_id=method.file_id, file_unique_id="u", file_path="f.pdf")
+                return True
+
+            async def stream_content(self, url, headers=None, timeout=30,
+                                     chunk_size=65536, raise_for_status=True):
+                yield b"%PDF-1.4 ok"
+
+            async def close(self):
+                pass
+
+        self.tmp = tempfile.TemporaryDirectory()
+        db_path = Path(self.tmp.name) / "t.db"
+        settings = _settings(database_path=db_path)
+        self.db = Database(db_path)
+        await self.db.connect()
+        self.bot = Bot("123:abc", session=FakeSession())
+        panel = StaffPanel(self.bot, settings, self.db)
+        self.orders = OrderService(
+            db=self.db, settings=settings, receipt_checker=MockReceiptChecker(),
+            on_change=panel.sync,
+        )
+        ctx = AppContext(settings=settings, db=self.db, orders=self.orders,
+                         rates=RateService(settings), panel=panel)
+        self.dp = Dispatcher(storage=MemoryStorage())
+        self.dp.update.middleware(ContextMiddleware(ctx))
+        setup_routers(self.dp)
+        self.upd = 0
+
+    async def asyncTearDown(self) -> None:
+        await self.db.close()
+        self.tmp.cleanup()
+
+    async def _feed(self, user_id: int, *, data: str | None = None, **msg) -> None:
+        from datetime import datetime, timezone
+
+        from aiogram.types import CallbackQuery, Chat, Message, Update, User
+
+        self.upd += 1
+        user = User(id=user_id, is_bot=False, first_name="C", username="c")
+        chat = Chat(id=user_id, type="private")
+        now = datetime.now(timezone.utc)
+        if data is not None:
+            m = Message(message_id=500 + self.upd, date=now, chat=chat, text="card")
+            update = Update(update_id=self.upd, callback_query=CallbackQuery(
+                id=str(self.upd), from_user=user, chat_instance="x", message=m, data=data))
+        else:
+            update = Update(update_id=self.upd, message=Message(
+                message_id=self.upd, date=now, chat=chat, from_user=user, **msg))
+        await self.dp.feed_update(self.bot, update)
+
+    async def _order_waiting_payment(self, client_id: int):
+        order = await self.orders.create_order(
+            client_tg_id=client_id, client_username="c", amount_rub=5000, usdt_address="",
+        )
+        return await self.orders.assign_requisites(
+            order, support_tg_id=2, requisites=Requisites(bank="Сбер", detail="+7900")
+        )
+
+    def _pdf(self):
+        from aiogram.types import Document
+
+        return {"document": Document(file_id="pdf1", file_unique_id="p1",
+                                     file_name="чек.pdf", mime_type="application/pdf")}
+
+    async def test_photo_rejected_pdf_then_video(self) -> None:
+        from aiogram.types import PhotoSize, Video
+
+        order = await self._order_waiting_payment(40)
+        await self._feed(40, data=f"client:upload:{order.id}")
+        self.assertIn("чек в формате PDF", self.sent[-1])
+        # Фото не принимаем
+        await self._feed(40, photo=[PhotoSize(file_id="ph", file_unique_id="ph", width=1, height=1)])
+        self.assertIn("Принимаем только", self.sent[-1])
+        # PDF → просим видео
+        await self._feed(40, **self._pdf())
+        self.assertIn("Шаг 2 из 2", self.sent[-1])
+        # Видео → чек уходит на проверку вместе с видео
+        await self._feed(40, video=Video(file_id="vid1", file_unique_id="v1",
+                                         width=1, height=1, duration=5))
+        order = await self.db.get_order_by_id(order.id)
+        self.assertEqual(order.status, OrderStatus.AWAITING_SUPPORT_REVIEW)
+        self.assertEqual(order.receipt_file_id, "pdf1")
+        self.assertEqual(order.extra["payment_video_file_id"], "vid1")
+
+    async def test_no_video_not_trusted_goes_to_support(self) -> None:
+        order = await self._order_waiting_payment(41)
+        await self._feed(41, data=f"client:upload:{order.id}")
+        await self._feed(41, **self._pdf())
+        await self._feed(41, data="client:novideo")
+        self.assertIn("Georgina771", self.sent[-1])
+        order = await self.db.get_order_by_id(order.id)
+        self.assertEqual(order.status, OrderStatus.AWAITING_PAYMENT)  # ждёт видео/оператора
+        self.assertTrue(order.extra.get("no_video"))
+
+    async def test_no_video_trusted_goes_on(self) -> None:
+        order = await self._order_waiting_payment(42)
+        order = await self.orders.set_client_trusted(order, trusted=True, by_tg_id=1)
+        await self._feed(42, data=f"client:upload:{order.id}")
+        await self._feed(42, **self._pdf())
+        await self._feed(42, data="client:novideo")
+        order = await self.db.get_order_by_id(order.id)
+        self.assertEqual(order.status, OrderStatus.AWAITING_SUPPORT_REVIEW)
+        self.assertIsNone(order.extra.get("payment_video_file_id"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -138,6 +138,7 @@ async def main() -> None:
             BotCommand(command="support", description="Панель саппорта"),
             BotCommand(command="admin", description="Панель администратора"),
             BotCommand(command="stats", description="Статистика (сотрудники)"),
+            BotCommand(command="trusted", description="Доверенные клиенты (сотрудники)"),
         ]
     )
     await bot.set_chat_menu_button(menu_button=MenuButtonCommands())

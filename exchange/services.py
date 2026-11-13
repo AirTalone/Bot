@@ -125,7 +125,11 @@ class OrderService:
             amount_usdt=amount_usdt,
             rate=rate,
             usdt_address=address,
-            extra=quote.to_extra(),
+            extra={
+                **quote.to_extra(),
+                # Доверенным клиентам видео перевода не нужно
+                "video_required": not await self.db.is_trusted(client_tg_id),
+            },
         )
 
     @_notifies
@@ -260,6 +264,8 @@ class OrderService:
         file_bytes: bytes,
         filename: str,
         mime_type: str | None,
+        video_file_id: str | None = None,
+        video_kind: str | None = None,
     ) -> tuple[Order, ReceiptCheckResult]:
         if order.status not in {
             OrderStatus.AWAITING_PAYMENT,
@@ -278,6 +284,12 @@ class OrderService:
             receipt_file_unique_id=file_unique_id,
             receipt_check_status="pending",
             receipt_check_message="Отправлено на автопроверку",
+            extra={
+                **(order.extra or {}),
+                # Видео перевода (у доверенных клиентов — нет)
+                "payment_video_file_id": video_file_id,
+                "payment_video_kind": video_kind,
+            },
         )
 
         result = await self.receipt_checker.check(
@@ -379,6 +391,37 @@ class OrderService:
             receipt_check_message=None,
             payment_deadline_at=iso(deadline),
         )
+
+    @_notifies
+    async def set_client_trusted(
+        self, order: Order, *, trusted: bool, by_tg_id: int
+    ) -> Order:
+        """
+        Сделать клиента доверенным (видео перевода не нужно) или убрать из доверенных.
+        Флаг video_required обновляется в этой заявке и в активной заявке клиента.
+        """
+        if trusted:
+            await self.db.set_trusted(
+                order.client_tg_id, username=order.client_username, added_by=by_tg_id
+            )
+        else:
+            await self.db.remove_trusted(order.client_tg_id)
+
+        async def _apply(target: Order) -> Order:
+            extra = dict(target.extra or {})
+            extra["video_required"] = not trusted
+            return await self.db.update_fields(target.id, extra=extra)
+
+        updated = await _apply(order)
+        active = await self.db.active_client_order(order.client_tg_id)
+        if active is not None and active.id != order.id:
+            active = await _apply(active)
+            if self.on_change is not None:
+                try:
+                    await self.on_change(active)
+                except Exception:
+                    logger.exception("on_change failed for %s", active.public_id)
+        return updated
 
     @_notifies
     async def extend_payment(self, order: Order, *, support_tg_id: int) -> Order:

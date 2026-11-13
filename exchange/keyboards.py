@@ -24,6 +24,15 @@ def support_contact_kb(username: str) -> InlineKeyboardMarkup | None:
     )
 
 
+def no_video_kb() -> InlineKeyboardMarkup:
+    """Шаг «видео перевода»: если видео нет."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🚫 Нет видео", callback_data="client:novideo")]
+        ]
+    )
+
+
 def client_main_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
@@ -186,6 +195,24 @@ def _btn(text: str, data: str) -> InlineKeyboardButton:
     return InlineKeyboardButton(text=text, callback_data=data)
 
 
+def _files_row(order: Order) -> list[InlineKeyboardButton]:
+    """«🧾 Показать чек» и «🎥 Показать видео» в одну строку."""
+    oid = order.id
+    row = []
+    if order.receipt_file_id:
+        row.append(_btn("🧾 Показать чек", f"support:receipt:{oid}"))
+    if (order.extra or {}).get("payment_video_file_id"):
+        row.append(_btn("🎥 Показать видео", f"support:video:{oid}"))
+    return row
+
+
+def _trust_row(order: Order) -> list[InlineKeyboardButton]:
+    """Доверенный клиент — без видео перевода."""
+    if (order.extra or {}).get("video_required") is False:
+        return [_btn("Убрать из доверенных", f"staff:untrust:{order.id}")]
+    return [_btn("⭐ Сделать доверенным", f"staff:trust:{order.id}")]
+
+
 def staff_order_kb(
     order: Order, *, in_group: bool = False, owner_id: int | None = None
 ) -> InlineKeyboardMarkup | None:
@@ -198,9 +225,11 @@ def staff_order_kb(
     rows: list[list[InlineKeyboardButton]] = []
 
     if order.status in CLOSED_STATUSES:
-        if order.receipt_file_id:
-            rows.append([_btn("🧾 Показать чек", f"support:receipt:{oid}")])
-        return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+        files = _files_row(order)
+        if files:
+            rows.append(files)
+        rows.append(_trust_row(order))
+        return InlineKeyboardMarkup(inline_keyboard=rows)
 
     taken = owner_id is not None
 
@@ -242,16 +271,18 @@ def staff_order_kb(
 
     if order.status == OrderStatus.AWAITING_REQUISITES:
         rows.append([_btn("Отклонить по марже", f"support:reject_margin:{oid}")])
-    if order.receipt_file_id:
-        rows.append([_btn("🧾 Показать чек", f"support:receipt:{oid}")])
+    files = _files_row(order)
+    if files:
+        rows.append(files)
 
-    # 3. Спор / отмена / отпустить
+    # 3. Спор / отмена / доверенный / отпустить
     rows.append(
         [
             _btn("⚖️ Спор", f"support:dispute:{oid}"),
             _btn("❌ Отменить", f"support:cancel:{oid}"),
         ]
     )
+    rows.append(_trust_row(order))
     if in_group and taken:
         rows.append([_btn("↩️ Отпустить заявку", f"staff:release:{oid}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)

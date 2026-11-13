@@ -118,8 +118,9 @@ def _step_from_update(update: Update) -> Step | None:
         msg = update.message
         if msg.chat.type != "private":
             return None  # сообщения в группе ничего не заменяют
-        # Файлы и фото (чеки) не удаляем — только то, что пользователь написал
-        is_file = bool(msg.document or msg.photo)
+        # Файлы, фото и видео (чеки, видео перевода) не удаляем —
+        # только то, что пользователь написал
+        is_file = bool(msg.document or msg.photo or msg.video or msg.video_note)
         return Step(
             chat_id=msg.chat.id,
             user_message_id=None if is_file else msg.message_id,

@@ -14,6 +14,8 @@ from exchange.staff_card import staff_card
 from exchange.db import Database
 from exchange.handlers.common import welcome_text
 from exchange.keyboards import (
+    no_video_kb,
+    support_contact_kb,
     client_back_kb,
     client_main_kb,
     client_order_kb,
@@ -21,6 +23,7 @@ from exchange.keyboards import (
 )
 from exchange.rates import RateService
 from exchange.services import OrderError, OrderService
+from exchange.staff_panel import StaffPanel
 from exchange.states import ClientCreateOrder, ClientUploadReceipt
 from exchange.statuses import OrderStatus
 
@@ -350,6 +353,35 @@ async def client_cancel(
     await callback.answer("Отменено")
 
 
+PDF_HINT = (
+    "Скачать его можно в приложении банка: откройте перевод → "
+    "«Поделиться» или «Скачать чек»."
+)
+
+
+def _video_required(order) -> bool:
+    """Доверенным клиентам видео перевода не нужно (флаг в заявке)."""
+    return (order.extra or {}).get("video_required", True) is not False
+
+
+def _is_pdf(document) -> bool:
+    mime = (document.mime_type or "").lower()
+    name = (document.file_name or "").lower()
+    return mime == "application/pdf" or name.endswith(".pdf")
+
+
+def _video_from_message(message: Message) -> tuple[str, str] | None:
+    """(file_id, вид) видео из сообщения или None."""
+    if message.video:
+        return message.video.file_id, "video"
+    if message.video_note:
+        return message.video_note.file_id, "video_note"
+    doc = message.document
+    if doc and (doc.mime_type or "").lower().startswith("video/"):
+        return doc.file_id, "document"
+    return None
+
+
 @router.callback_query(F.data.startswith("client:upload:"))
 async def client_upload_start(
     callback: CallbackQuery, state: FSMContext, db: Database
@@ -367,16 +399,17 @@ async def client_upload_start(
         return
     await state.set_state(ClientUploadReceipt.waiting_file)
     await state.update_data(upload_order_id=order.id)
-    await callback.message.answer(  # type: ignore[union-attr]
-        f"Пришлите чек по заявке <b>{order.public_id}</b> файлом (PDF лучше) или фото.\n"
-        f"Сумма к оплате: <b>{order.amount_rub:.2f} ₽</b>\n"
-        f"/cancel — отменить загрузку.",
-        parse_mode="HTML",
+    text = (
+        f"📄 <b>{order.public_id}</b> · {fmt_rub(order.amount_rub)} ₽\n"
+        "Шаг 1 из 2 — пришлите <b>чек в формате PDF</b>.\n"
+        + PDF_HINT
+        + "\n\nПосле чека попросим видео перевода.\n/cancel — отменить загрузку."
     )
+    await callback.message.answer(text, parse_mode="HTML")  # type: ignore[union-attr]
     await callback.answer()
 
 
-@router.message(ClientUploadReceipt.waiting_file, F.document | F.photo)
+@router.message(ClientUploadReceipt.waiting_file, F.document)
 async def client_upload_file(
     message: Message,
     state: FSMContext,
@@ -386,36 +419,132 @@ async def client_upload_file(
     settings: Settings,
 ) -> None:
     data = await state.get_data()
-    order_id = int(data["upload_order_id"])
-    order = await db.get_order_by_id(order_id)
+    order = await db.get_order_by_id(int(data["upload_order_id"]))
     if order is None or message.from_user is None or message.from_user.id != order.client_tg_id:
         await state.clear()
         await message.answer("Заявка не найдена.")
         return
+    doc = message.document
+    if doc is None or not _is_pdf(doc):
+        await client_upload_wrong(message)
+        return
 
-    file_id: str
-    file_unique_id: str
-    filename: str
-    mime: str | None
+    pdf = {
+        "pdf_file_id": doc.file_id,
+        "pdf_file_unique_id": doc.file_unique_id,
+        "pdf_filename": doc.file_name or "receipt.pdf",
+        "pdf_mime": doc.mime_type or "application/pdf",
+    }
+    # Чек запомнили, теперь просим видео перевода (кнопка «Нет видео» — если его нет)
+    await state.update_data(**pdf)
+    await state.set_state(ClientUploadReceipt.waiting_video)
+    await message.answer(
+        "✅ Чек получен.\n\n"
+        "🎥 Шаг 2 из 2 — <b>видео перевода</b>.\n"
+        "Пришлите запись экрана, на которой видно весь перевод: вход "
+        "в приложение банка, ввод реквизитов и экран успешной оплаты.\n\n"
+        "Это помогает нам быстрее подтвердить оплату и защищает от ошибок "
+        "и мошенничества.",
+        parse_mode="HTML",
+        reply_markup=no_video_kb(),
+    )
 
-    if message.document:
-        file_id = message.document.file_id
-        file_unique_id = message.document.file_unique_id
-        filename = message.document.file_name or "receipt.bin"
-        mime = message.document.mime_type
-    else:
-        photo = message.photo[-1]
-        file_id = photo.file_id
-        file_unique_id = photo.file_unique_id
-        filename = "receipt.jpg"
-        mime = "image/jpeg"
 
+@router.callback_query(ClientUploadReceipt.waiting_video, F.data == "client:novideo")
+async def client_no_video(
+    callback: CallbackQuery,
+    state: FSMContext,
+    orders: OrderService,
+    db: Database,
+    bot: Bot,
+    settings: Settings,
+    panel: StaffPanel,
+) -> None:
+    """
+    Клиент не может прислать видео.
+    Доверенный — заявка идёт дальше по одному PDF-чеку.
+    Остальные — направляем в личку саппорта, заявка ждёт видео или решения оператора.
+    """
+    data = await state.get_data()
+    order = await db.get_order_by_id(int(data["upload_order_id"]))
+    if order is None or callback.from_user.id != order.client_tg_id:
+        await state.clear()
+        await callback.answer("Заявка не найдена", show_alert=True)
+        return
+    await callback.answer()
+    if not _video_required(order):
+        pdf = {k: data[k] for k in ("pdf_file_id", "pdf_file_unique_id", "pdf_filename", "pdf_mime")}
+        await _submit_receipt(
+            message=callback.message,  # type: ignore[arg-type]
+            state=state, orders=orders, bot=bot, settings=settings,
+            order=order, pdf=pdf, video=None,
+        )
+        return
+
+    # Не доверенный: пометка для сотрудников + отправляем к оператору
+    extra = dict(order.extra or {})
+    extra["no_video"] = True
+    order = await db.update_fields(order.id, extra=extra)
+    await panel.sync(order)
+    contact = settings.support_contact
+    who = f"оператору @{contact}" if contact else "в поддержку"
+    await callback.message.answer(  # type: ignore[union-attr]
+        "Без видео перевода мы не можем подтвердить оплату автоматически.\n\n"
+        f"Напишите, пожалуйста, {who} и укажите номер заявки "
+        f"<b>{order.public_id}</b> — оператор поможет.\n\n"
+        "Если видео всё-таки есть, просто пришлите его сюда.",
+        parse_mode="HTML",
+        reply_markup=support_contact_kb(contact),
+    )
+
+
+@router.message(ClientUploadReceipt.waiting_video)
+async def client_upload_video(
+    message: Message,
+    state: FSMContext,
+    orders: OrderService,
+    db: Database,
+    bot: Bot,
+    settings: Settings,
+) -> None:
+    video = _video_from_message(message)
+    if video is None:
+        await message.answer(
+            "Пришлите, пожалуйста, <b>видео перевода</b> — запись экрана "
+            "из приложения банка.\n/cancel — отменить загрузку.",
+            parse_mode="HTML",
+        )
+        return
+    data = await state.get_data()
+    order = await db.get_order_by_id(int(data["upload_order_id"]))
+    if order is None or message.from_user is None or message.from_user.id != order.client_tg_id:
+        await state.clear()
+        await message.answer("Заявка не найдена.")
+        return
+    pdf = {k: data[k] for k in ("pdf_file_id", "pdf_file_unique_id", "pdf_filename", "pdf_mime")}
+    await _submit_receipt(
+        message=message, state=state, orders=orders, bot=bot, settings=settings,
+        order=order, pdf=pdf, video=video,
+    )
+
+
+async def _submit_receipt(
+    *,
+    message: Message,
+    state: FSMContext,
+    orders: OrderService,
+    bot: Bot,
+    settings: Settings,
+    order,
+    pdf: dict,
+    video: tuple[str, str] | None,
+) -> None:
+    """Скачать PDF, отправить на автопроверку, показать клиенту результат."""
     from io import BytesIO
 
-    downloadable = message.document if message.document else message.photo[-1]
-    buffer = await bot.download(downloadable)
+    buffer = await bot.download(pdf["pdf_file_id"])
     if buffer is None:
-        await message.answer("Не удалось скачать файл из Telegram.")
+        await message.answer("Не удалось скачать файл из Telegram. Пришлите чек ещё раз.")
         return
     if isinstance(buffer, BytesIO):
         file_bytes = buffer.getvalue()
@@ -426,11 +555,13 @@ async def client_upload_file(
     try:
         order, result = await orders.submit_receipt(
             order,
-            file_id=file_id,
-            file_unique_id=file_unique_id,
+            file_id=pdf["pdf_file_id"],
+            file_unique_id=pdf["pdf_file_unique_id"],
             file_bytes=file_bytes,
-            filename=filename,
-            mime_type=mime,
+            filename=pdf["pdf_filename"],
+            mime_type=pdf["pdf_mime"],
+            video_file_id=video[0] if video else None,
+            video_kind=video[1] if video else None,
         )
     except OrderError as exc:
         await message.answer(str(exc))
@@ -472,4 +603,8 @@ async def _notify_staff_receipt(
 
 @router.message(ClientUploadReceipt.waiting_file)
 async def client_upload_wrong(message: Message) -> None:
-    await message.answer("Пришлите файл или фото чека, либо /cancel.")
+    await message.answer(
+        "Принимаем только <b>чек в формате PDF</b>. " + PDF_HINT
+        + " Пришлите его сюда файлом.\n/cancel — отменить загрузку.",
+        parse_mode="HTML",
+    )

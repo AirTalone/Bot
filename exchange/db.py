@@ -61,6 +61,14 @@ CREATE TABLE IF NOT EXISTS staff_cards (
     status TEXT NOT NULL
 );
 
+-- Доверенные клиенты: им не нужно присылать видео перевода
+CREATE TABLE IF NOT EXISTS trusted_clients (
+    tg_id INTEGER PRIMARY KEY,
+    username TEXT,
+    added_by INTEGER NOT NULL,
+    added_at TEXT NOT NULL
+);
+
 -- Кто из сотрудников ведёт заявку (кнопка «Взять»)
 CREATE TABLE IF NOT EXISTS order_owners (
     order_id INTEGER PRIMARY KEY,
@@ -377,6 +385,39 @@ class Database:
         )
         rows = await cursor.fetchall()
         return {int(r["order_id"]): (int(r["tg_id"]), str(r["name"])) for r in rows}
+
+    # ----- Доверенные клиенты (без видео перевода) -----
+
+    async def is_trusted(self, tg_id: int) -> bool:
+        cursor = await self.conn.execute(
+            "SELECT 1 FROM trusted_clients WHERE tg_id = ?", (tg_id,)
+        )
+        return await cursor.fetchone() is not None
+
+    async def set_trusted(
+        self, tg_id: int, *, username: str | None, added_by: int
+    ) -> None:
+        await self.conn.execute(
+            """
+            INSERT INTO trusted_clients (tg_id, username, added_by, added_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(tg_id) DO UPDATE SET username = excluded.username
+            """,
+            (tg_id, username, added_by, iso(utcnow())),
+        )
+        await self.conn.commit()
+
+    async def remove_trusted(self, tg_id: int) -> None:
+        await self.conn.execute("DELETE FROM trusted_clients WHERE tg_id = ?", (tg_id,))
+        await self.conn.commit()
+
+    async def list_trusted(self) -> list[tuple[int, str | None, str]]:
+        """[(tg_id, username, added_at)] — новые сверху."""
+        cursor = await self.conn.execute(
+            "SELECT tg_id, username, added_at FROM trusted_clients ORDER BY added_at DESC"
+        )
+        rows = await cursor.fetchall()
+        return [(int(r["tg_id"]), r["username"], str(r["added_at"])) for r in rows]
 
     async def expire_overdue(self, now: datetime | None = None) -> list[Order]:
         now = now or utcnow()
