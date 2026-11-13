@@ -8,6 +8,7 @@ from aiogram.types import Message
 from exchange.client_card import fmt_rub
 from exchange.config import Settings
 from exchange.staff_card import staff_rate_text
+from exchange.staff_panel import STAFF_DEEPLINK
 from exchange.keyboards import SUPPORT_BUTTON_TEXT, client_main_kb, support_contact_kb
 
 router = Router(name="common")
@@ -58,6 +59,19 @@ def welcome_text(settings: Settings, user_id: int | None, rates=None) -> str:
     elif user_id is not None and settings.is_support(user_id):
         parts.append("<i>Ваша роль: саппорт</i>")
     return "\n\n".join(parts)
+
+
+@router.message(CommandStart(deep_link=True, magic=F.args == STAFF_DEEPLINK))
+async def staff_deeplink(message: Message) -> None:
+    """
+    Сотрудник перешёл из рабочей группы в личку (кнопка → ссылка на бота).
+    Вопрос (банк, причина, TxID…) уже ждёт в чате — меню не показываем,
+    ввод не сбрасываем, служебный /start просто убираем.
+    """
+    try:
+        await message.delete()
+    except Exception:
+        pass
 
 
 @router.message(CommandStart())

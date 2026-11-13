@@ -164,8 +164,10 @@ async def start_staff_input(
             show_alert=True,
         )
         return False
-    in_group = callback.message is not None and callback.message.chat.type != "private"
-    await callback.answer("Продолжим в личке с ботом 👉" if in_group else None)
+    if is_group_callback(callback):
+        await open_bot_chat(callback, bot)
+    else:
+        await callback.answer()
     return True
 
 
@@ -190,7 +192,25 @@ async def send_receipt(callback: CallbackQuery, bot: Bot, order: Order, kb) -> N
             show_alert=True,
         )
         return
-    await callback.answer("Чек отправлен вам в личку" if is_group_callback(callback) else None)
+    if is_group_callback(callback):
+        await open_bot_chat(callback, bot)
+    else:
+        await callback.answer()
+
+
+# Параметр ссылки t.me/<бот>?start=… — по нему бот понимает, что это переход
+# из рабочей группы, и не показывает меню поверх вопроса
+STAFF_DEEPLINK = "staff"
+
+
+async def open_bot_chat(callback: CallbackQuery, bot: Bot) -> None:
+    """Ответить на нажатие в группе так, чтобы Telegram открыл личный чат с ботом."""
+    try:
+        me = await bot.me()
+        await callback.answer(url=f"https://t.me/{me.username}?start={STAFF_DEEPLINK}")
+    except Exception:
+        logger.exception("open bot chat failed")
+        await callback.answer("Продолжите в личке с ботом 👉", show_alert=True)
 
 
 def is_group_callback(callback: CallbackQuery) -> bool:
