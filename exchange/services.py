@@ -6,6 +6,7 @@ import functools
 import json
 import logging
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Awaitable, Callable
 
 from exchange.config import Settings
@@ -364,6 +365,8 @@ class OrderService:
     ) -> Order:
         """Вернуть на ожидание оплаты (те же или будет перевыдача реквизитов)."""
         await self._transition(order, OrderStatus.AWAITING_PAYMENT)
+        # Новый срок оплаты от текущего момента, иначе заявка сразу истечёт
+        deadline = utcnow() + timedelta(minutes=self.settings.payment_ttl_minutes)
         return await self.db.update_fields(
             order.id,
             status=OrderStatus.AWAITING_PAYMENT,
@@ -374,6 +377,27 @@ class OrderService:
             receipt_file_unique_id=None,
             receipt_check_status=None,
             receipt_check_message=None,
+            payment_deadline_at=iso(deadline),
+        )
+
+    @_notifies
+    async def extend_payment(self, order: Order, *, support_tg_id: int) -> Order:
+        """
+        Продлить срок оплаты (клиент говорит с банком):
+        срок = выдача реквизитов + PAYMENT_TTL_EXTENDED_MINUTES.
+        """
+        if order.status != OrderStatus.AWAITING_PAYMENT:
+            raise OrderError("Продлить можно только заявку, которая ждёт оплату")
+        start = order.requisites_at or utcnow()
+        deadline = start + timedelta(minutes=self.settings.payment_ttl_extended_minutes)
+        if order.payment_deadline_at and deadline <= order.payment_deadline_at:
+            raise OrderError(
+                f"Срок уже не меньше {self.settings.payment_ttl_extended_minutes} минут"
+            )
+        extra = dict(order.extra or {})
+        extra.update({"deadline_extended": True, "deadline_extended_by": support_tg_id})
+        return await self.db.update_fields(
+            order.id, payment_deadline_at=iso(deadline), extra=extra
         )
 
     @_notifies

@@ -184,7 +184,8 @@ def staff_card(
         lines.append("🏦 Реквизиты: " + " · ".join(req))
     if order.status == OrderStatus.AWAITING_PAYMENT and order.payment_deadline_at:
         deadline = order.payment_deadline_at.astimezone(MOSCOW_TZ).strftime("%H:%M")
-        lines.append(f"⏳ Оплатить до {deadline} МСК")
+        extended = " (продлено)" if (order.extra or {}).get("deadline_extended") else ""
+        lines.append(f"⏳ Оплатить до {deadline} МСК{extended}")
     receipt = _receipt_line(order)
     if receipt:
         lines.append(receipt)

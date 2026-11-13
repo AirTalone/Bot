@@ -226,6 +226,13 @@ def staff_order_kb(
     elif in_group and not taken:
         rows.append([_btn("🙋 Взять заявку", f"staff:take:{oid}")])
 
+    # Клиент говорит с банком — саппорт продлевает срок оплаты (один раз)
+    if (
+        order.status == OrderStatus.AWAITING_PAYMENT
+        and not (order.extra or {}).get("deadline_extended")
+    ):
+        rows.append([_btn("⏳ Продлить время оплаты", f"support:extend:{oid}")])
+
     # 2. Курс и кошелёк
     pair = []
     if order.status in RATE_EDITABLE:

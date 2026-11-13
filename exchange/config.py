@@ -37,6 +37,8 @@ class Settings:
     min_amount_rub: float
     max_amount_rub: float
     payment_ttl_minutes: int
+    # Продление срока оплаты саппортом (клиент говорит с банком)
+    payment_ttl_extended_minutes: int
     receipt_provider: str  # mock | http
     receipt_api_url: str
     receipt_api_key: str
@@ -111,7 +113,8 @@ def load_settings() -> Settings:
         spread_percent=float(os.getenv("SPREAD_PERCENT", "2")),
         min_amount_rub=float(os.getenv("MIN_AMOUNT_RUB", "3000")),
         max_amount_rub=float(os.getenv("MAX_AMOUNT_RUB", "150000")),
-        payment_ttl_minutes=int(os.getenv("PAYMENT_TTL_MINUTES", "20")),
+        payment_ttl_minutes=int(os.getenv("PAYMENT_TTL_MINUTES", "30")),
+        payment_ttl_extended_minutes=int(os.getenv("PAYMENT_TTL_EXTENDED_MINUTES", "60")),
         receipt_provider=os.getenv("RECEIPT_PROVIDER", "mock").strip().lower(),
         receipt_api_url=os.getenv("RECEIPT_API_URL", "").strip(),
         receipt_api_key=os.getenv("RECEIPT_API_KEY", "").strip(),

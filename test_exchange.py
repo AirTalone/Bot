@@ -27,7 +27,8 @@ def _settings(**overrides) -> Settings:
         spread_percent=0.0,
         min_amount_rub=1000.0,
         max_amount_rub=100000.0,
-        payment_ttl_minutes=20,
+        payment_ttl_minutes=30,
+        payment_ttl_extended_minutes=60,
         receipt_provider="mock",
         receipt_api_url="",
         receipt_api_key="",
@@ -461,9 +462,10 @@ class SupportHelpTests(unittest.TestCase):
         from exchange.handlers.common import help_text
         from exchange.keyboards import support_contact_kb
 
-        s = _settings(payment_ttl_minutes=20)
+        s = _settings(payment_ttl_minutes=30, payment_ttl_extended_minutes=60)
         text = help_text(s)
-        self.assertIn("20 минут", text)
+        self.assertIn("30 минут", text)
+        self.assertIn("до 60 минут", text)
         self.assertIn("@Georgina771", text)
         kb = support_contact_kb(s.support_contact)
         self.assertEqual(kb.inline_keyboard[0][0].url, "https://t.me/Georgina771")
@@ -777,6 +779,58 @@ class ScreenMiddlewareTests(unittest.IsolatedAsyncioTestCase):
         await mw(make_request, bot, SendMessage(chat_id=10, text="шаг 2"))
         _current_step.reset(token)
         self.assertEqual(deleted, [100])
+
+
+class PaymentDeadlineTests(unittest.IsolatedAsyncioTestCase):
+    """30 минут на оплату; саппорт продлевает до 60 (клиент говорит с банком)."""
+
+    async def asyncSetUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        db_path = Path(self.tmp.name) / "t.db"
+        self.db = Database(db_path)
+        await self.db.connect()
+        self.orders = OrderService(
+            db=self.db,
+            settings=_settings(database_path=db_path),
+            receipt_checker=MockReceiptChecker(),
+        )
+        order = await self.orders.create_order(
+            client_tg_id=20, client_username=None, amount_rub=5000, usdt_address="",
+        )
+        self.order = await self.orders.assign_requisites(
+            order, support_tg_id=2, requisites=Requisites(bank="Сбер", detail="+7900")
+        )
+
+    async def asyncTearDown(self) -> None:
+        await self.db.close()
+        self.tmp.cleanup()
+
+    def _minutes(self, order) -> float:
+        return (order.payment_deadline_at - order.requisites_at).total_seconds() / 60
+
+    async def test_default_30_then_extend_to_60_once(self) -> None:
+        self.assertAlmostEqual(self._minutes(self.order), 30, delta=0.1)
+        order = await self.orders.extend_payment(self.order, support_tg_id=2)
+        self.assertAlmostEqual(self._minutes(order), 60, delta=0.1)
+        self.assertTrue(order.extra.get("deadline_extended"))
+        with self.assertRaises(OrderError):
+            await self.orders.extend_payment(order, support_tg_id=2)
+
+    async def test_extend_only_while_awaiting_payment(self) -> None:
+        order = await self.orders.cancel(self.order, reason="тест")
+        with self.assertRaises(OrderError):
+            await self.orders.extend_payment(order, support_tg_id=2)
+
+    async def test_repay_gives_fresh_deadline(self) -> None:
+        from datetime import datetime, timezone
+
+        order, _ = await self.orders.submit_receipt(
+            self.order, file_id="f", file_unique_id="u", file_bytes=b"ok",
+            filename="ok.pdf", mime_type="application/pdf",
+        )
+        order = await self.orders.support_request_new_payment(order, support_tg_id=2)
+        left = (order.payment_deadline_at - datetime.now(timezone.utc)).total_seconds() / 60
+        self.assertAlmostEqual(left, 30, delta=0.2)
 
 
 if __name__ == "__main__":

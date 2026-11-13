@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from html import escape
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
@@ -26,6 +27,7 @@ from exchange.statuses import SUPPORT_QUEUES
 
 logger = logging.getLogger(__name__)
 router = Router(name="support")
+MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
 
 def _require_support(settings: Settings, user_id: int) -> bool:
@@ -465,6 +467,41 @@ async def support_reject_start(
         data={"note_order_id": order.id, "note_action": "reject"},
         text=f"Заявка <b>{order.public_id}</b>\nУкажите причину отклонения чека:",
     )
+
+
+@router.callback_query(F.data.startswith("support:extend:"))
+async def support_extend_payment(
+    callback: CallbackQuery,
+    settings: Settings,
+    orders: OrderService,
+    db: Database,
+    bot: Bot,
+    panel: StaffPanel,
+) -> None:
+    """Клиент говорит с банком — продлить срок оплаты."""
+    order = await _load_for_action(callback, settings, db, panel)
+    if order is None:
+        return
+    try:
+        order = await orders.extend_payment(order, support_tg_id=callback.from_user.id)
+    except OrderError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    deadline = (
+        order.payment_deadline_at.astimezone(MOSCOW_TZ).strftime("%H:%M")
+        if order.payment_deadline_at
+        else "—"
+    )
+    if not is_group_callback(callback):
+        await callback.message.answer(  # type: ignore[union-attr]
+            f"⏳ Срок оплаты по <b>{order.public_id}</b> продлён до {deadline} МСК",
+            parse_mode="HTML",
+            reply_markup=support_order_kb(order),
+        )
+    await _notify_client(
+        bot, order, f"⏳ <b>Время на оплату продлено до {deadline} (МСК)</b>\n\n"
+    )
+    await callback.answer(f"Продлено до {deadline} МСК")
 
 
 @router.callback_query(F.data.startswith("support:repay:"))
