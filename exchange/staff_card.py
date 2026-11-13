@@ -126,16 +126,14 @@ def staff_rate_text(rates, settings) -> str:
         lines.append(f"💰 Ваш доход: <b>{snap.expected_margin_percent:.2f}%</b>")
 
     lines.append(f"👤 Курс клиенту: <b>{snap.client:.2f} ₽</b>")
-    tiers = []
+    # Курс для крупных сумм — каждый порог отдельной строкой
     for tier, discount in (
         (settings.amount_tier_30k, settings.amount_discount_30k),
         (settings.amount_tier_40k, settings.amount_discount_40k),
     ):
         if discount > 0:
             rate = rates.quote_for_amount(tier + 1).suggested_rate
-            tiers.append(f"свыше {fmt_rub(tier / 1000)}к → {rate:.2f}")
-    if tiers:
-        lines.append("     " + " · ".join(tiers))
+            lines.append(f"     свыше {fmt_rub(tier / 1000)}к → {rate:.2f} ₽")
     if snap.rapira is not None:
         lines.append(f"📊 Rapira: {snap.rapira:.2f} (для справки)")
 
