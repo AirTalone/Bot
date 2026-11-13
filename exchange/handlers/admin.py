@@ -14,7 +14,7 @@ from exchange.staff_card import staff_card
 from exchange.db import Database
 from exchange.keyboards import admin_home_kb, admin_order_kb
 from exchange.services import OrderError, OrderService
-from exchange.staff_panel import send_receipt, start_staff_input
+from exchange.staff_panel import StaffPanel, send_receipt, start_staff_input
 from exchange.states import AdminPayout, SupportNote
 from exchange.statuses import ADMIN_QUEUES
 
@@ -88,10 +88,9 @@ async def admin_payout_start(
         bot,
         new_state=AdminPayout.waiting_txid,
         data={"payout_order_id": order.id},
-        text=f"Заявка <b>{order.public_id}</b>\n\n"
-        f"Отправьте USDT на <code>{escape(order.usdt_address)}</code>\n"
-        f"Сумма: <code>{order.usdt_exact}</code> USDT\n\n"
-        f"Затем пришлите TxID / hash транзакции:",
+        text=f"💸 <b>{order.public_id}</b> · <code>{order.usdt_exact}</code> USDT\n"
+        f"Отправьте на <code>{escape(order.usdt_address)}</code>\n"
+        f"и пришлите TxID / хеш транзакции:",
     )
 
 
@@ -103,6 +102,7 @@ async def admin_payout_finish(
     orders: OrderService,
     db: Database,
     bot: Bot,
+    panel: StaffPanel,
 ) -> None:
     if message.from_user is None or not _require_admin(settings, message.from_user.id):
         await state.clear()
@@ -122,11 +122,19 @@ async def admin_payout_finish(
         return
 
     await state.clear()
-    await message.answer(
-        "Выплата зафиксирована.\n\n" + staff_card(order),
-        parse_mode="HTML",
-        reply_markup=admin_order_kb(order),
+    done = (
+        f"✅ Выплата по <b>{order.public_id}</b> зафиксирована\n"
+        f"TxID: <code>{escape(order.payout_txid or '')}</code>"
     )
+    if panel.enabled:
+        # Карточка в рабочей группе уже обновилась
+        await message.answer(done, parse_mode="HTML")
+    else:
+        await message.answer(
+            done + "\n\n" + staff_card(order),
+            parse_mode="HTML",
+            reply_markup=admin_order_kb(order),
+        )
     try:
         await bot.send_message(
             order.client_tg_id,

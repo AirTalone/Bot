@@ -337,6 +337,19 @@ class CcFormulaTests(unittest.TestCase):
         self.assertIsNone(q.to_extra()["income_percent"])
 
 
+class RequisitesPromptTests(unittest.TestCase):
+    def test_bank_buttons_and_skip(self) -> None:
+        from exchange.handlers.support import REQ_BANKS, _req_kb
+
+        bank_kb = _req_kb("bank")
+        texts = [b.text for row in bank_kb.inline_keyboard for b in row]
+        for name in REQ_BANKS:
+            self.assertIn(name, texts)
+        self.assertIn("✖️ Отменить выдачу", texts)
+        holder = [b.callback_data for row in _req_kb("holder").inline_keyboard for b in row]
+        self.assertIn("reqholder:skip", holder)
+
+
 class StaffRateTextTests(unittest.TestCase):
     def test_staff_rate_text(self) -> None:
         from exchange.rates.pricing import compute_client_quote

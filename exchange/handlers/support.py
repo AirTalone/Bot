@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import logging
+from html import escape
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from exchange.client_card import client_card
+from exchange.client_card import client_card, fmt_rub
 from exchange.config import Settings
 from exchange.staff_card import staff_card
 from exchange.db import Database
@@ -100,6 +101,44 @@ async def support_queue(
     await callback.answer()
 
 
+def _order_head(order: Order, icon: str, extra: str = "") -> str:
+    """Короткая шапка вопроса в личке: номер заявки и сумма."""
+    return f"{icon} <b>{order.public_id}</b> · {fmt_rub(order.amount_rub)} ₽{extra}"
+
+
+async def _done(message: Message, panel: StaffPanel, order: Order, text: str) -> None:
+    """
+    Итог действия в личке. С рабочей группой — одна строка (карточка в группе
+    уже обновилась). Без группы — строка + карточка с кнопками.
+    """
+    if panel.enabled:
+        await message.answer(text, parse_mode="HTML")
+    else:
+        await message.answer(
+            text + "\n\n" + staff_card(order),
+            parse_mode="HTML",
+            reply_markup=support_order_kb(order),
+        )
+
+
+# Частые банки для кнопок на шаге 1 (любой другой можно написать текстом)
+REQ_BANKS = ["Сбер", "Тинькофф", "Альфа", "ВТБ", "Озон", "Яндекс"]
+
+
+def _req_kb(step: str) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if step == "bank":
+        buttons = [
+            InlineKeyboardButton(text=name, callback_data=f"reqbank:{i}")
+            for i, name in enumerate(REQ_BANKS)
+        ]
+        rows += [buttons[i : i + 3] for i in range(0, len(buttons), 3)]
+    if step == "holder":
+        rows.append([InlineKeyboardButton(text="Пропустить", callback_data="reqholder:skip")])
+    rows.append([InlineKeyboardButton(text="✖️ Отменить выдачу", callback_data="reqcancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 @router.callback_query(F.data.startswith("support:rate:"))
 async def support_rate_start(
     callback: CallbackQuery,
@@ -118,8 +157,8 @@ async def support_rate_start(
         bot,
         new_state=SupportSetRate.waiting,
         data={"rate_order_id": order.id},
-        text=staff_card(order)
-        + "\n\nВведите итоговый курс числом (например <code>80.8</code>):",
+        text=_order_head(order, "📈", f" · сейчас {order.rate:.2f} ₽")
+        + "\nВведите новый курс числом, например <code>87.5</code>",
     )
 
 
@@ -131,6 +170,7 @@ async def support_rate_finish(
     orders: OrderService,
     db: Database,
     bot: Bot,
+    panel: StaffPanel,
 ) -> None:
     if message.from_user is None or not _require_support(settings, message.from_user.id):
         await state.clear()
@@ -139,7 +179,7 @@ async def support_rate_finish(
     try:
         rate = float(raw)
     except ValueError:
-        await message.answer("Нужно число, например 80.8")
+        await message.answer("Нужно число, например 87.5")
         return
     data = await state.get_data()
     order = await db.get_order_by_id(int(data["rate_order_id"]))
@@ -156,10 +196,11 @@ async def support_rate_finish(
         await state.clear()
         return
     await state.clear()
-    await message.answer(
-        "Курс обновлён.\n\n" + staff_card(order),
-        parse_mode="HTML",
-        reply_markup=support_order_kb(order),
+    margin = (order.extra or {}).get("margin_percent")
+    income = f" · доход {float(margin):.2f}%" if margin is not None else ""
+    await _done(
+        message, panel, order,
+        f"✅ Курс по <b>{order.public_id}</b>: {order.rate:.2f} ₽{income}",
     )
     await _notify_client(bot, order, "📈 <b>Курс по заявке обновлён</b>\n\n")
 
@@ -182,10 +223,12 @@ async def support_reject_margin(
         bot,
         new_state=SupportNote.waiting,
         data={"note_order_id": order.id, "note_action": "cancel"},
-        text=staff_card(order)
-        + "\n\nОтклонение по марже. Укажите причину для клиента "
-        "(или «слабая маржа»):",
+        text=_order_head(order, "❌")
+        + "\nПричина отклонения для клиента (например «слабая маржа»):",
     )
+
+
+# ----- Выдача реквизитов: 3 шага (банк → номер → получатель) -----
 
 
 @router.callback_query(F.data.startswith("support:req:"))
@@ -202,36 +245,131 @@ async def support_req_start(
         return
     warn = ""
     if (order.extra or {}).get("margin_ok") is False:
-        warn = (
-            "\n\n⚠️ Маржа ниже минимума. Ты всё равно берёшь сделку — "
-            "проверь курс перед выдачей реквизитов."
-        )
+        warn = "\n⚠️ Доход ниже минимума — проверьте курс"
     await start_staff_input(
         callback,
         state,
         bot,
         new_state=SupportAssignRequisites.bank,
         data={"req_order_id": order.id},
-        text=staff_card(order)
+        text=_order_head(order, "🏦")
         + warn
-        + f"\n\nВыдача реквизитов для <b>{order.public_id}</b> "
-        f"({order.amount_rub:.2f} ₽).\n"
-        f"1/3 — название банка (как на площадке):",
+        + "\nШаг 1 из 3 — выберите или напишите <b>банк</b>",
+        reply_markup=_req_kb("bank"),
     )
 
 
-@router.message(SupportAssignRequisites.bank)
-async def support_req_bank(message: Message, state: FSMContext) -> None:
-    await state.update_data(bank=(message.text or "").strip())
+async def _ask_detail(answer, state: FSMContext, db: Database, bank: str) -> None:
+    data = await state.get_data()
+    order = await db.get_order_by_id(int(data["req_order_id"]))
+    await state.update_data(bank=bank)
     await state.set_state(SupportAssignRequisites.detail)
-    await message.answer("2/3 — реквизиты (телефон / карта / счёт):")
+    head = _order_head(order, "🏦", f" · {escape(bank)}") if order else "🏦"
+    await answer(
+        head + "\nШаг 2 из 3 — <b>номер</b> карты / телефона",
+        parse_mode="HTML",
+        reply_markup=_req_kb("detail"),
+    )
+
+
+@router.callback_query(SupportAssignRequisites.bank, F.data.startswith("reqbank:"))
+async def support_req_bank_button(
+    callback: CallbackQuery, state: FSMContext, db: Database
+) -> None:
+    idx = int(callback.data.split(":")[1])  # type: ignore[union-attr]
+    await callback.answer()
+    await _ask_detail(callback.message.answer, state, db, REQ_BANKS[idx])  # type: ignore[union-attr]
+
+
+@router.message(SupportAssignRequisites.bank)
+async def support_req_bank(message: Message, state: FSMContext, db: Database) -> None:
+    bank = (message.text or "").strip()
+    if not bank:
+        await message.answer("Напишите название банка текстом или выберите кнопкой.")
+        return
+    await _ask_detail(message.answer, state, db, bank)
 
 
 @router.message(SupportAssignRequisites.detail)
-async def support_req_detail(message: Message, state: FSMContext) -> None:
-    await state.update_data(detail=(message.text or "").strip())
+async def support_req_detail(message: Message, state: FSMContext, db: Database) -> None:
+    detail = (message.text or "").strip()
+    if not detail:
+        await message.answer("Пришлите номер карты или телефона текстом.")
+        return
+    await state.update_data(detail=detail)
     await state.set_state(SupportAssignRequisites.holder)
-    await message.answer("3/3 — ФИО / получатель (или «-» если нет):")
+    data = await state.get_data()
+    order = await db.get_order_by_id(int(data["req_order_id"]))
+    bank = str(data.get("bank") or "")
+    head = _order_head(order, "🏦", f" · {escape(bank)}") if order else "🏦"
+    await message.answer(
+        head + "\nШаг 3 из 3 — <b>получатель</b> (ФИО)",
+        parse_mode="HTML",
+        reply_markup=_req_kb("holder"),
+    )
+
+
+async def _finish_requisites(
+    *,
+    user_id: int,
+    holder: str,
+    answer_message: Message,
+    state: FSMContext,
+    orders: OrderService,
+    db: Database,
+    bot: Bot,
+    panel: StaffPanel,
+) -> None:
+    data = await state.get_data()
+    order = await db.get_order_by_id(int(data["req_order_id"]))
+    if order is None:
+        await state.clear()
+        await answer_message.answer("Заявка исчезла.")
+        return
+    requisites = Requisites(
+        bank=str(data.get("bank") or ""),
+        detail=str(data.get("detail") or ""),
+        holder=holder,
+        sbp_url="",
+    )
+    try:
+        order = await orders.assign_requisites(
+            order, support_tg_id=user_id, requisites=requisites
+        )
+    except OrderError as exc:
+        await answer_message.answer(str(exc))
+        await state.clear()
+        return
+    await state.clear()
+    parts = [escape(requisites.bank), f"<code>{escape(requisites.detail)}</code>"]
+    if holder:
+        parts.append(escape(holder))
+    await _done(
+        answer_message, panel, order,
+        f"✅ Реквизиты по <b>{order.public_id}</b> выданы клиенту\n" + " · ".join(parts),
+    )
+    await _notify_client(bot, order)
+
+
+@router.callback_query(SupportAssignRequisites.holder, F.data == "reqholder:skip")
+async def support_req_holder_skip(
+    callback: CallbackQuery,
+    state: FSMContext,
+    orders: OrderService,
+    db: Database,
+    bot: Bot,
+    settings: Settings,
+    panel: StaffPanel,
+) -> None:
+    if not _require_support(settings, callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    await callback.answer()
+    await _finish_requisites(
+        user_id=callback.from_user.id, holder="",
+        answer_message=callback.message,  # type: ignore[arg-type]
+        state=state, orders=orders, db=db, bot=bot, panel=panel,
+    )
 
 
 @router.message(SupportAssignRequisites.holder)
@@ -242,44 +380,27 @@ async def support_req_finish(
     db: Database,
     bot: Bot,
     settings: Settings,
+    panel: StaffPanel,
 ) -> None:
     if message.from_user is None or not _require_support(settings, message.from_user.id):
         await state.clear()
         return
-
     holder = (message.text or "").strip()
     if holder == "-":
         holder = ""
-
-    data = await state.get_data()
-    order = await db.get_order_by_id(int(data["req_order_id"]))
-    if order is None:
-        await state.clear()
-        await message.answer("Заявка исчезла.")
-        return
-
-    requisites = Requisites(
-        bank=str(data.get("bank") or ""),
-        detail=str(data.get("detail") or ""),
-        holder=holder,
-        sbp_url="",
+    await _finish_requisites(
+        user_id=message.from_user.id, holder=holder, answer_message=message,
+        state=state, orders=orders, db=db, bot=bot, panel=panel,
     )
-    try:
-        order = await orders.assign_requisites(
-            order, support_tg_id=message.from_user.id, requisites=requisites
-        )
-    except OrderError as exc:
-        await message.answer(str(exc))
-        await state.clear()
-        return
 
+
+@router.callback_query(F.data == "reqcancel")
+async def support_req_cancel(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    await message.answer(
-        "Реквизиты выданы клиенту.\n\n" + staff_card(order),
-        parse_mode="HTML",
-        reply_markup=support_order_kb(order),
+    await callback.answer("Отменено")
+    await callback.message.answer(  # type: ignore[union-attr]
+        "Выдача реквизитов отменена. Заявка осталась в очереди."
     )
-    await _notify_client(bot, order)
 
 
 @router.callback_query(F.data.startswith("support:approve:"))
@@ -409,6 +530,7 @@ async def support_note_finish(
     orders: OrderService,
     db: Database,
     bot: Bot,
+    panel: StaffPanel,
 ) -> None:
     if message.from_user is None or not _require_support(settings, message.from_user.id):
         await state.clear()
@@ -438,12 +560,15 @@ async def support_note_finish(
         return
 
     await state.clear()
-    await message.answer(
-        staff_card(order),
-        parse_mode="HTML",
-        reply_markup=support_order_kb(order),
+    done = {
+        "reject": "⚠️ Чек отклонён",
+        "dispute": "⚖️ Заявка переведена в спор",
+    }.get(action, "❌ Заявка отменена")
+    await _done(
+        message, panel, order,
+        f"{done}: <b>{order.public_id}</b>\nПричина: {escape(reason)}",
     )
-    # Причина (отклонения чека / отмены) уже есть в карточке
+    # Причина (отклонения чека / отмены) уже есть в карточке клиента
     await _notify_client(bot, order)
 
 

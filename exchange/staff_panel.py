@@ -146,6 +146,7 @@ async def start_staff_input(
     new_state: State,
     data: dict,
     text: str,
+    reply_markup=None,
 ) -> bool:
     """
     Начать ввод текста в личке с ботом. Если кнопку нажали в группе —
@@ -156,7 +157,7 @@ async def start_staff_input(
     await ctx.set_state(new_state)
     await ctx.set_data(data)
     try:
-        await bot.send_message(user_id, text, parse_mode="HTML")
+        await bot.send_message(user_id, text, parse_mode="HTML", reply_markup=reply_markup)
     except (TelegramForbiddenError, TelegramBadRequest):
         await ctx.clear()
         await callback.answer(
