@@ -20,6 +20,7 @@ from aiogram.types import BotCommand, MenuButtonCommands
 from dotenv import load_dotenv
 
 from exchange.client_card import client_card
+from exchange.keyboards import client_order_kb
 from exchange.config import load_settings
 from exchange.context import AppContext, ContextMiddleware
 from exchange.db import Database
@@ -59,6 +60,7 @@ async def expire_loop(orders: OrderService, bot: Bot, interval_sec: int = 60) ->
                         order.client_tg_id,
                         client_card(order),
                         parse_mode="HTML",
+                        reply_markup=client_order_kb(order),
                     )
                 except Exception:
                     logger.exception("expire notify failed for %s", order.public_id)

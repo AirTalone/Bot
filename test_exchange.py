@@ -337,6 +337,32 @@ class CcFormulaTests(unittest.TestCase):
         self.assertIsNone(q.to_extra()["income_percent"])
 
 
+class ClientOrderKbTests(unittest.TestCase):
+    def test_new_order_button_on_closed(self) -> None:
+        from datetime import datetime, timezone
+
+        from exchange.keyboards import client_order_kb
+        from exchange.models import Order
+
+        now = datetime.now(timezone.utc)
+
+        def kb_data(status):
+            o = Order(
+                id=1, public_id="EX-1", client_tg_id=1, client_username=None,
+                amount_rub=5000, amount_usdt=57.0, rate=87.8, usdt_address="",
+                status=status, created_at=now, updated_at=now,
+            )
+            return [b.callback_data for row in client_order_kb(o).inline_keyboard for b in row]
+
+        for status in (OrderStatus.CANCELLED, OrderStatus.EXPIRED, OrderStatus.COMPLETED):
+            data = kb_data(status)
+            self.assertIn("client:new", data)
+            self.assertNotIn("client:status:1", data)
+        active = kb_data(OrderStatus.AWAITING_PAYMENT)
+        self.assertIn("client:status:1", active)
+        self.assertNotIn("client:new", active)
+
+
 class RequisitesPromptTests(unittest.TestCase):
     def test_bank_buttons_and_skip(self) -> None:
         from exchange.handlers.support import REQ_BANKS, _req_kb

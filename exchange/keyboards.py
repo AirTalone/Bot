@@ -112,14 +112,29 @@ def client_order_kb(order: Order) -> InlineKeyboardMarkup:
                 )
             ]
         )
-    rows.append(
-        [
-            InlineKeyboardButton(
-                text="Обновить статус",
-                callback_data=f"client:status:{order.id}",
-            )
-        ]
-    )
+    if order.status in {
+        OrderStatus.COMPLETED,
+        OrderStatus.CANCELLED,
+        OrderStatus.EXPIRED,
+    }:
+        # Заявка закрыта — статус больше не меняется, предлагаем новую
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🔁 Создать новую заявку",
+                    callback_data="client:new",
+                )
+            ]
+        )
+    else:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="Обновить статус",
+                    callback_data=f"client:status:{order.id}",
+                )
+            ]
+        )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

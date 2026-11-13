@@ -80,6 +80,20 @@ def _amount_prompt(settings: Settings, rates: RateService, error: str = "") -> s
     return text
 
 
+@router.callback_query(F.data == "client:new")
+async def new_order_button(
+    callback: CallbackQuery, state: FSMContext, settings: Settings, rates: RateService
+) -> None:
+    """Кнопка «🔁 Создать новую заявку» под закрытой заявкой."""
+    await state.set_state(ClientCreateOrder.amount)
+    await callback.message.answer(  # type: ignore[union-attr]
+        _amount_prompt(settings, rates),
+        parse_mode="HTML",
+        reply_markup=client_back_kb(),
+    )
+    await callback.answer()
+
+
 @router.callback_query(F.data == "client:back")
 async def back_to_menu(
     callback: CallbackQuery, state: FSMContext, settings: Settings, rates: RateService

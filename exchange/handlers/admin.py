@@ -12,7 +12,7 @@ from exchange.client_card import client_card
 from exchange.config import Settings
 from exchange.staff_card import staff_card
 from exchange.db import Database
-from exchange.keyboards import admin_home_kb, admin_order_kb
+from exchange.keyboards import admin_home_kb, admin_order_kb, client_order_kb
 from exchange.services import OrderError, OrderService
 from exchange.staff_panel import StaffPanel, send_receipt, start_staff_input
 from exchange.states import AdminPayout, SupportNote
@@ -140,6 +140,7 @@ async def admin_payout_finish(
             order.client_tg_id,
             client_card(order),
             parse_mode="HTML",
+            reply_markup=client_order_kb(order),
         )
     except Exception:
         logger.exception("payout client notify failed")
