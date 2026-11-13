@@ -133,7 +133,6 @@ def _req_kb(step: str) -> InlineKeyboardMarkup:
             for i, name in enumerate(REQ_BANKS)
         ]
         rows += [buttons[i : i + 3] for i in range(0, len(buttons), 3)]
-        rows.append([InlineKeyboardButton(text="✏️ Другой банк", callback_data="reqbank:other")])
     if step == "holder":
         rows.append([InlineKeyboardButton(text="Пропустить", callback_data="reqholder:skip")])
     rows.append([InlineKeyboardButton(text="✖️ Отменить выдачу", callback_data="reqcancel")])
@@ -255,8 +254,7 @@ async def support_req_start(
         data={"req_order_id": order.id},
         text=_order_head(order, "🏦")
         + warn
-        + "\nШаг 1 из 3 — <b>банк</b>: нажмите кнопку\n"
-        "или напишите название сообщением",
+        + "\nШаг 1 из 3 — выберите или напишите <b>банк</b>",
         reply_markup=_req_kb("bank"),
     )
 
@@ -271,22 +269,6 @@ async def _ask_detail(answer, state: FSMContext, db: Database, bank: str) -> Non
         head + "\nШаг 2 из 3 — <b>номер</b> карты / телефона",
         parse_mode="HTML",
         reply_markup=_req_kb("detail"),
-    )
-
-
-@router.callback_query(SupportAssignRequisites.bank, F.data == "reqbank:other")
-async def support_req_bank_other(
-    callback: CallbackQuery, state: FSMContext, db: Database
-) -> None:
-    """«✏️ Другой банк» — просим написать название, шаг 1 продолжается."""
-    data = await state.get_data()
-    order = await db.get_order_by_id(int(data["req_order_id"]))
-    head = _order_head(order, "🏦") if order else "🏦"
-    await callback.answer()
-    await callback.message.answer(  # type: ignore[union-attr]
-        head + "\nШаг 1 из 3 — напишите <b>название банка</b> сообщением",
-        parse_mode="HTML",
-        reply_markup=_req_kb("cancel"),
     )
 
 

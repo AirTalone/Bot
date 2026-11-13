@@ -346,7 +346,6 @@ class RequisitesPromptTests(unittest.TestCase):
         for name in REQ_BANKS:
             self.assertIn(name, texts)
         self.assertIn("✖️ Отменить выдачу", texts)
-        self.assertIn("✏️ Другой банк", texts)
         holder = [b.callback_data for row in _req_kb("holder").inline_keyboard for b in row]
         self.assertIn("reqholder:skip", holder)
 
