@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 import logging
+from html import escape
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
+from exchange.client_card import client_card
 from exchange.config import Settings
+from exchange.staff_card import staff_card
 from exchange.db import Database
 from exchange.keyboards import admin_order_kb, client_order_kb, support_order_kb
 from exchange.services import OrderError, OrderService
+from exchange.staff_panel import start_staff_input
 from exchange.states import SetUsdtAddress
 from exchange.statuses import OrderStatus
 
@@ -32,7 +36,11 @@ def _can_edit_wallet(
 
 @router.callback_query(F.data.startswith("wallet:set:"))
 async def wallet_set_start(
-    callback: CallbackQuery, state: FSMContext, settings: Settings, db: Database
+    callback: CallbackQuery,
+    state: FSMContext,
+    settings: Settings,
+    db: Database,
+    bot: Bot,
 ) -> None:
     order_id = int(callback.data.split(":")[-1])  # type: ignore[union-attr]
     order = await db.get_order_by_id(order_id)
@@ -50,21 +58,23 @@ async def wallet_set_start(
         await callback.answer("Заявка уже закрыта", show_alert=True)
         return
 
-    await state.set_state(SetUsdtAddress.waiting)
-    await state.update_data(wallet_order_id=order.id)
     current = (
-        f"Сейчас: <code>{order.usdt_address}</code>\n"
+        f"Сейчас: <code>{escape(order.usdt_address)}</code>\n"
         if order.has_usdt_address
         else "Сейчас адрес не указан.\n"
     )
-    await callback.message.answer(  # type: ignore[union-attr]
-        f"Заявка <b>{order.public_id}</b>\n"
+    # Ввод — в личке (если кнопку нажали в рабочей группе, вопрос придёт в личку)
+    await start_staff_input(
+        callback,
+        state,
+        bot,
+        new_state=SetUsdtAddress.waiting,
+        data={"wallet_order_id": order.id},
+        text=f"Заявка <b>{order.public_id}</b>\n"
         f"{current}"
         "Пришлите адрес USDT (TRC-20 / как принимаете).\n"
         "/cancel — отменить ввод.",
-        parse_mode="HTML",
     )
-    await callback.answer()
 
 
 @router.message(Command("cancel"), StateFilter(SetUsdtAddress))
@@ -110,26 +120,25 @@ async def wallet_set_finish(
 
     await state.clear()
 
-    if settings.is_admin(message.from_user.id):
-        kb = admin_order_kb(order)
-    elif settings.is_support(message.from_user.id):
-        kb = support_order_kb(order)
-    else:
+    is_client = message.from_user.id == order.client_tg_id
+    if is_client:
         kb = client_order_kb(order)
+        text = "👛 <b>Кошелёк сохранён</b>\n\n" + client_card(order)
+    else:
+        if settings.is_admin(message.from_user.id):
+            kb = admin_order_kb(order)
+        else:
+            kb = support_order_kb(order)
+        text = "Адрес USDT сохранён.\n\n" + staff_card(order)
 
-    await message.answer(
-        "Адрес USDT сохранён.\n\n" + order.short_card(),
-        parse_mode="HTML",
-        reply_markup=kb,
-    )
+    await message.answer(text, parse_mode="HTML", reply_markup=kb)
 
     # Если адрес внёс не клиент — уведомим клиента.
     if message.from_user.id != order.client_tg_id:
         try:
             await bot.send_message(
                 order.client_tg_id,
-                f"Для заявки <b>{order.public_id}</b> указан адрес USDT:\n"
-                f"<code>{order.usdt_address}</code>",
+                "👛 <b>Кошелёк для заявки указан</b>\n\n" + client_card(order),
                 parse_mode="HTML",
                 reply_markup=client_order_kb(order),
             )

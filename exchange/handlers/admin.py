@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import logging
+from html import escape
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
+from exchange.client_card import client_card
 from exchange.config import Settings
+from exchange.staff_card import staff_card
 from exchange.db import Database
 from exchange.keyboards import admin_home_kb, admin_order_kb
 from exchange.services import OrderError, OrderService
+from exchange.staff_panel import send_receipt, start_staff_input
 from exchange.states import AdminPayout, SupportNote
 from exchange.statuses import ADMIN_QUEUES
 
@@ -49,7 +53,7 @@ async def admin_queue(
         return
     for order in items:
         await callback.message.answer(  # type: ignore[union-attr]
-            order.short_card(),
+            staff_card(order),
             parse_mode="HTML",
             reply_markup=admin_order_kb(order),
         )
@@ -58,10 +62,14 @@ async def admin_queue(
 
 @router.callback_query(F.data.startswith("admin:payout:"))
 async def admin_payout_start(
-    callback: CallbackQuery, state: FSMContext, settings: Settings, db: Database
+    callback: CallbackQuery,
+    state: FSMContext,
+    settings: Settings,
+    db: Database,
+    bot: Bot,
 ) -> None:
     if not _require_admin(settings, callback.from_user.id):
-        await callback.answer("Нет доступа", show_alert=True)
+        await callback.answer("Выплату отмечает только админ", show_alert=True)
         return
     order_id = int(callback.data.split(":")[-1])  # type: ignore[union-attr]
     order = await db.get_order_by_id(order_id)
@@ -69,23 +77,22 @@ async def admin_payout_start(
         await callback.answer("Не найдено", show_alert=True)
         return
     if not order.has_usdt_address:
-        await callback.message.answer(  # type: ignore[union-attr]
-            f"У заявки <b>{order.public_id}</b> ещё нет USDT-адреса.\n"
-            "Сначала нажмите «Указать кошелёк USDT», потом фиксируйте выплату.",
-            parse_mode="HTML",
-            reply_markup=admin_order_kb(order),
+        await callback.answer(
+            "У заявки ещё нет USDT-адреса. Сначала нажмите «Указать кошелёк USDT».",
+            show_alert=True,
         )
-        await callback.answer("Нужен адрес кошелька", show_alert=True)
         return
-    await state.set_state(AdminPayout.waiting_txid)
-    await state.update_data(payout_order_id=order.id)
-    await callback.message.answer(  # type: ignore[union-attr]
-        f"Отправьте USDT на <code>{order.usdt_address}</code>\n"
-        f"Сумма: <b>{order.amount_usdt:.4f} USDT</b>\n\n"
+    await start_staff_input(
+        callback,
+        state,
+        bot,
+        new_state=AdminPayout.waiting_txid,
+        data={"payout_order_id": order.id},
+        text=f"Заявка <b>{order.public_id}</b>\n\n"
+        f"Отправьте USDT на <code>{escape(order.usdt_address)}</code>\n"
+        f"Сумма: <code>{order.usdt_exact}</code> USDT\n\n"
         f"Затем пришлите TxID / hash транзакции:",
-        parse_mode="HTML",
     )
-    await callback.answer()
 
 
 @router.message(AdminPayout.waiting_txid)
@@ -116,16 +123,14 @@ async def admin_payout_finish(
 
     await state.clear()
     await message.answer(
-        "Выплата зафиксирована.\n\n" + order.short_card(),
+        "Выплата зафиксирована.\n\n" + staff_card(order),
         parse_mode="HTML",
         reply_markup=admin_order_kb(order),
     )
     try:
         await bot.send_message(
             order.client_tg_id,
-            f"✅ USDT отправлены по заявке <b>{order.public_id}</b>\n"
-            f"Сумма: <b>{order.amount_usdt:.4f} USDT</b>\n"
-            f"TxID: <code>{order.payout_txid}</code>",
+            client_card(order),
             parse_mode="HTML",
         )
     except Exception:
@@ -144,26 +149,25 @@ async def admin_show_receipt(
     if order is None or not order.receipt_file_id:
         await callback.answer("Чека нет", show_alert=True)
         return
-    await bot.send_document(
-        callback.from_user.id,
-        document=order.receipt_file_id,
-        caption=f"Чек {order.public_id}",
-    )
-    await callback.answer()
+    await send_receipt(callback, bot, order, admin_order_kb(order))
 
 
 @router.callback_query(F.data.startswith("admin:dispute:"))
 @router.callback_query(F.data.startswith("admin:cancel:"))
 async def admin_dispute_or_cancel(
-    callback: CallbackQuery, state: FSMContext, settings: Settings
+    callback: CallbackQuery, state: FSMContext, settings: Settings, bot: Bot
 ) -> None:
     if not _require_admin(settings, callback.from_user.id):
         await callback.answer("Нет доступа", show_alert=True)
         return
     parts = callback.data.split(":")  # type: ignore[union-attr]
     action, order_id = parts[1], int(parts[2])
-    await state.set_state(SupportNote.waiting)
-    await state.update_data(note_order_id=order_id, note_action=action, note_as_admin=True)
     prompt = "Причина спора:" if action == "dispute" else "Причина отмены:"
-    await callback.message.answer(prompt)  # type: ignore[union-attr]
-    await callback.answer()
+    await start_staff_input(
+        callback,
+        state,
+        bot,
+        new_state=SupportNote.waiting,
+        data={"note_order_id": order_id, "note_action": action, "note_as_admin": True},
+        text=prompt,
+    )

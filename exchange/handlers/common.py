@@ -5,6 +5,7 @@ from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.fsm.state import default_state
 from aiogram.types import Message
 
+from exchange.client_card import fmt_rub
 from exchange.config import Settings
 from exchange.keyboards import client_main_kb
 
@@ -21,24 +22,45 @@ HELP_TEXT = (
 )
 
 
-def welcome_text(settings: Settings, user_id: int | None) -> str:
-    role_bits = []
-    if user_id is not None and settings.is_admin(user_id):
-        role_bits.append("админ")
-    elif user_id is not None and settings.is_support(user_id):
-        role_bits.append("саппорт")
-    extra = f"\nВаша роль: {', '.join(role_bits)}" if role_bits else ""
-    return "Привет! Обмен рублей на USDT через заявки." + extra + "\n\n" + HELP_TEXT
+def welcome_text(settings: Settings, user_id: int | None, rates=None) -> str:
+    """Приветствие / главное меню: курс и лимиты во врезке + короткие шаги."""
+    parts = ["👋 <b>Обмен RUB → USDT</b>"]
 
+    quote_lines = []
+    if rates is not None:
+        quote_lines.append(
+            f"Курс сейчас: <b>{rates.client_rate():.2f} ₽</b> за 1 USDT"
+        )
+    quote_lines.append(
+        f"Сумма: от {fmt_rub(settings.min_amount_rub)} "
+        f"до {fmt_rub(settings.max_amount_rub)} ₽"
+    )
+    parts.append("<blockquote>" + "\n".join(quote_lines) + "</blockquote>")
+
+    parts.append(
+        "Как это работает:\n"
+        "1. Создаёте заявку\n"
+        "2. Получаете реквизиты и оплачиваете\n"
+        "3. Присылаете чек\n"
+        "4. Получаете USDT на кошелёк"
+    )
+    parts.append("Нажмите «Обменять RUB → USDT», чтобы начать.")
+
+    # Роль видят только сотрудники
+    if user_id is not None and settings.is_admin(user_id):
+        parts.append("<i>Ваша роль: админ</i>")
+    elif user_id is not None and settings.is_support(user_id):
+        parts.append("<i>Ваша роль: саппорт</i>")
+    return "\n\n".join(parts)
 
 
 @router.message(CommandStart())
 @router.message(Command("menu"))
 @router.message(F.text == "Меню")
-async def cmd_start(message: Message, settings: Settings) -> None:
+async def cmd_start(message: Message, settings: Settings, rates) -> None:
     user_id = message.from_user.id if message.from_user else None
     await message.answer(
-        welcome_text(settings, user_id),
+        welcome_text(settings, user_id, rates),
         reply_markup=client_main_kb(),
         parse_mode="HTML",
     )

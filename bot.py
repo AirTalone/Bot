@@ -12,12 +12,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, MenuButtonCommands
 from dotenv import load_dotenv
 
+from exchange.client_card import client_card
 from exchange.config import load_settings
 from exchange.context import AppContext, ContextMiddleware
 from exchange.db import Database
@@ -26,15 +28,25 @@ from exchange.rates import RateService
 from exchange.rates.samples import RateSampleStore
 from exchange.rates.service import default_samples_path
 from exchange.receipt import build_receipt_checker
+from exchange.screen import setup_screen
 from exchange.services import OrderService
+from exchange.staff_panel import StaffPanel
+from exchange.statuses import CLIENT_VISIBLE_ACTIVE
 
-load_dotenv()
+# Какой файл настроек читать. По умолчанию .env (боевой).
+# Для тестов: ENV_FILE=.env.test (так делает start_test.bat).
+ENV_FILE = os.getenv("ENV_FILE", ".env")
+# utf-8-sig: не ломаемся, если Блокнот сохранил файл с невидимым BOM в начале
+load_dotenv(ENV_FILE, encoding="utf-8-sig")
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
+if not os.path.exists(ENV_FILE):
+    logger.warning("Файл настроек %s не найден — берутся только переменные окружения", ENV_FILE)
+logger.info("Настройки загружены из %s", ENV_FILE)
 
 
 async def expire_loop(orders: OrderService, bot: Bot, interval_sec: int = 60) -> None:
@@ -45,8 +57,7 @@ async def expire_loop(orders: OrderService, bot: Bot, interval_sec: int = 60) ->
                 try:
                     await bot.send_message(
                         order.client_tg_id,
-                        f"⏰ Время оплаты по заявке <b>{order.public_id}</b> истекло.\n"
-                        "Создайте новую заявку, если обмен ещё актуален.",
+                        client_card(order),
                         parse_mode="HTML",
                     )
                 except Exception:
@@ -88,13 +99,29 @@ async def main() -> None:
         receipt_checker=receipt_checker,
         rates=rate_service,
     )
+    bot = Bot(token=settings.bot_token)
+
+    # Панель сотрудников в рабочей группе: карточка заявки обновляется
+    # после каждого изменения заявки
+    panel = StaffPanel(bot, settings, db)
+    order_service.on_change = panel.sync
+    if panel.enabled:
+        logger.info("Рабочая группа сотрудников: %s", settings.staff_chat_id)
+        # Обновить карточки активных заявок (новый вид после обновления бота)
+        for order in await db.list_by_statuses(CLIENT_VISIBLE_ACTIVE, limit=200):
+            await panel.sync(order)
+    else:
+        logger.info("STAFF_CHAT_ID не задан — уведомления сотрудникам идут в личку")
+
     ctx = AppContext(
-        settings=settings, db=db, orders=order_service, rates=rate_service
+        settings=settings, db=db, orders=order_service, rates=rate_service,
+        panel=panel,
     )
 
-    bot = Bot(token=settings.bot_token)
     dp = Dispatcher(storage=MemoryStorage())
     dp.update.middleware(ContextMiddleware(ctx))
+    # Каждое действие пользователя заменяет прошлое сообщение бота
+    setup_screen(bot, dp)
     setup_routers(dp)
 
     # Меню команд слева от поля ввода в Telegram (без обязательного набора /start)
@@ -108,6 +135,7 @@ async def main() -> None:
             BotCommand(command="help", description="Помощь"),
             BotCommand(command="support", description="Панель саппорта"),
             BotCommand(command="admin", description="Панель администратора"),
+            BotCommand(command="stats", description="Статистика (сотрудники)"),
         ]
     )
     await bot.set_chat_menu_button(menu_button=MenuButtonCommands())

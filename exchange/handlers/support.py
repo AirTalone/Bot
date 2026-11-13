@@ -7,11 +7,19 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
+from exchange.client_card import client_card
 from exchange.config import Settings
+from exchange.staff_card import staff_card
 from exchange.db import Database
 from exchange.keyboards import client_order_kb, support_home_kb, support_order_kb
-from exchange.models import Requisites
+from exchange.models import Order, Requisites
 from exchange.services import OrderError, OrderService
+from exchange.staff_panel import (
+    StaffPanel,
+    is_group_callback,
+    send_receipt,
+    start_staff_input,
+)
 from exchange.states import SupportAssignRequisites, SupportNote, SupportSetRate
 from exchange.statuses import SUPPORT_QUEUES
 
@@ -21,6 +29,37 @@ router = Router(name="support")
 
 def _require_support(settings: Settings, user_id: int) -> bool:
     return settings.is_support(user_id)
+
+
+async def _load_for_action(
+    callback: CallbackQuery, settings: Settings, db: Database, panel: StaffPanel
+) -> Order | None:
+    """Проверить доступ, найти заявку и закрепить её за сотрудником."""
+    if not _require_support(settings, callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return None
+    order_id = int(callback.data.split(":")[-1])  # type: ignore[union-attr]
+    order = await db.get_order_by_id(order_id)
+    if order is None:
+        await callback.answer("Не найдено", show_alert=True)
+        return None
+    error = await panel.ensure_owner(order, callback.from_user)
+    if error:
+        await callback.answer(error, show_alert=True)
+        return None
+    return order
+
+
+async def _notify_client(bot: Bot, order: Order, header: str = "") -> None:
+    try:
+        await bot.send_message(
+            order.client_tg_id,
+            header + client_card(order),
+            parse_mode="HTML",
+            reply_markup=client_order_kb(order),
+        )
+    except Exception:
+        logger.exception("client notify failed for %s", order.public_id)
 
 
 @router.message(Command("support"))
@@ -54,7 +93,7 @@ async def support_queue(
     await callback.message.answer(f"Очередь «{key}»: {len(items)}")  # type: ignore[union-attr]
     for order in items:
         await callback.message.answer(  # type: ignore[union-attr]
-            order.short_card(for_support=True),
+            staff_card(order),
             parse_mode="HTML",
             reply_markup=support_order_kb(order),
         )
@@ -63,24 +102,25 @@ async def support_queue(
 
 @router.callback_query(F.data.startswith("support:rate:"))
 async def support_rate_start(
-    callback: CallbackQuery, state: FSMContext, settings: Settings, db: Database
+    callback: CallbackQuery,
+    state: FSMContext,
+    settings: Settings,
+    db: Database,
+    panel: StaffPanel,
+    bot: Bot,
 ) -> None:
-    if not _require_support(settings, callback.from_user.id):
-        await callback.answer("Нет доступа", show_alert=True)
-        return
-    order_id = int(callback.data.split(":")[-1])  # type: ignore[union-attr]
-    order = await db.get_order_by_id(order_id)
+    order = await _load_for_action(callback, settings, db, panel)
     if order is None:
-        await callback.answer("Не найдено", show_alert=True)
         return
-    await state.set_state(SupportSetRate.waiting)
-    await state.update_data(rate_order_id=order.id)
-    await callback.message.answer(  # type: ignore[union-attr]
-        order.short_card(for_support=True)
+    await start_staff_input(
+        callback,
+        state,
+        bot,
+        new_state=SupportSetRate.waiting,
+        data={"rate_order_id": order.id},
+        text=staff_card(order)
         + "\n\nВведите итоговый курс числом (например <code>80.8</code>):",
-        parse_mode="HTML",
     )
-    await callback.answer()
 
 
 @router.message(SupportSetRate.waiting)
@@ -117,57 +157,48 @@ async def support_rate_finish(
         return
     await state.clear()
     await message.answer(
-        "Курс обновлён.\n\n" + order.short_card(for_support=True),
+        "Курс обновлён.\n\n" + staff_card(order),
         parse_mode="HTML",
         reply_markup=support_order_kb(order),
     )
-    try:
-        await bot.send_message(
-            order.client_tg_id,
-            f"Курс по заявке <b>{order.public_id}</b> обновлён: "
-            f"<b>{order.rate:.4f}</b> ₽/USDT\n"
-            f"К выплате: <b>{order.amount_usdt:.4f} USDT</b>",
-            parse_mode="HTML",
-            reply_markup=client_order_kb(order),
-        )
-    except Exception:
-        logger.exception("Failed to notify client about rate change")
+    await _notify_client(bot, order, "📈 <b>Курс по заявке обновлён</b>\n\n")
 
 
 @router.callback_query(F.data.startswith("support:reject_margin:"))
 async def support_reject_margin(
-    callback: CallbackQuery, state: FSMContext, settings: Settings, db: Database
+    callback: CallbackQuery,
+    state: FSMContext,
+    settings: Settings,
+    db: Database,
+    panel: StaffPanel,
+    bot: Bot,
 ) -> None:
-    if not _require_support(settings, callback.from_user.id):
-        await callback.answer("Нет доступа", show_alert=True)
-        return
-    order_id = int(callback.data.split(":")[-1])  # type: ignore[union-attr]
-    order = await db.get_order_by_id(order_id)
+    order = await _load_for_action(callback, settings, db, panel)
     if order is None:
-        await callback.answer("Не найдено", show_alert=True)
         return
-    await state.set_state(SupportNote.waiting)
-    await state.update_data(note_order_id=order.id, note_action="cancel")
-    await callback.message.answer(  # type: ignore[union-attr]
-        order.short_card(for_support=True)
+    await start_staff_input(
+        callback,
+        state,
+        bot,
+        new_state=SupportNote.waiting,
+        data={"note_order_id": order.id, "note_action": "cancel"},
+        text=staff_card(order)
         + "\n\nОтклонение по марже. Укажите причину для клиента "
         "(или «слабая маржа»):",
-        parse_mode="HTML",
     )
-    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("support:req:"))
 async def support_req_start(
-    callback: CallbackQuery, state: FSMContext, settings: Settings, db: Database
+    callback: CallbackQuery,
+    state: FSMContext,
+    settings: Settings,
+    db: Database,
+    panel: StaffPanel,
+    bot: Bot,
 ) -> None:
-    if not _require_support(settings, callback.from_user.id):
-        await callback.answer("Нет доступа", show_alert=True)
-        return
-    order_id = int(callback.data.split(":")[-1])  # type: ignore[union-attr]
-    order = await db.get_order_by_id(order_id)
+    order = await _load_for_action(callback, settings, db, panel)
     if order is None:
-        await callback.answer("Не найдено", show_alert=True)
         return
     warn = ""
     if (order.extra or {}).get("margin_ok") is False:
@@ -175,17 +206,18 @@ async def support_req_start(
             "\n\n⚠️ Маржа ниже минимума. Ты всё равно берёшь сделку — "
             "проверь курс перед выдачей реквизитов."
         )
-    await state.set_state(SupportAssignRequisites.bank)
-    await state.update_data(req_order_id=order.id)
-    await callback.message.answer(  # type: ignore[union-attr]
-        order.short_card(for_support=True)
+    await start_staff_input(
+        callback,
+        state,
+        bot,
+        new_state=SupportAssignRequisites.bank,
+        data={"req_order_id": order.id},
+        text=staff_card(order)
         + warn
         + f"\n\nВыдача реквизитов для <b>{order.public_id}</b> "
         f"({order.amount_rub:.2f} ₽).\n"
         f"1/3 — название банка (как на площадке):",
-        parse_mode="HTML",
     )
-    await callback.answer()
 
 
 @router.message(SupportAssignRequisites.bank)
@@ -243,35 +275,11 @@ async def support_req_finish(
 
     await state.clear()
     await message.answer(
-        "Реквизиты выданы клиенту.\n\n" + order.short_card(for_support=True),
+        "Реквизиты выданы клиенту.\n\n" + staff_card(order),
         parse_mode="HTML",
         reply_markup=support_order_kb(order),
     )
-
-    client_text = (
-        f"Реквизиты по заявке <b>{order.public_id}</b>\n\n"
-        f"Сумма к оплате: <b>{order.amount_rub:.2f} ₽</b>\n"
-        f"Банк: {order.requisites_bank or '—'}\n"
-        f"Реквизиты: <code>{order.requisites_detail}</code>\n"
-    )
-    if order.requisites_holder:
-        client_text += f"Получатель: {order.requisites_holder}\n"
-    if order.payment_deadline_at:
-        client_text += (
-            f"\nОплатите до: <b>{order.payment_deadline_at.strftime('%H:%M:%S UTC')}</b>\n"
-            f"(таймер {settings.payment_ttl_minutes} мин)\n"
-        )
-    client_text += "\nПосле оплаты нажмите кнопку «Я оплатил»."
-
-    try:
-        await bot.send_message(
-            order.client_tg_id,
-            client_text,
-            parse_mode="HTML",
-            reply_markup=client_order_kb(order),
-        )
-    except Exception:
-        logger.exception("Failed to notify client %s", order.client_tg_id)
+    await _notify_client(bot, order)
 
 
 @router.callback_query(F.data.startswith("support:approve:"))
@@ -281,14 +289,10 @@ async def support_approve(
     orders: OrderService,
     db: Database,
     bot: Bot,
+    panel: StaffPanel,
 ) -> None:
-    if not _require_support(settings, callback.from_user.id):
-        await callback.answer("Нет доступа", show_alert=True)
-        return
-    order_id = int(callback.data.split(":")[-1])  # type: ignore[union-attr]
-    order = await db.get_order_by_id(order_id)
+    order = await _load_for_action(callback, settings, db, panel)
     if order is None:
-        await callback.answer("Не найдено", show_alert=True)
         return
     try:
         order = await orders.support_approve(
@@ -298,49 +302,48 @@ async def support_approve(
         await callback.answer(str(exc), show_alert=True)
         return
 
-    await callback.message.answer(  # type: ignore[union-attr]
-        "Одобрено → очередь выплаты админу.\n\n" + order.short_card(for_support=True),
-        parse_mode="HTML",
-        reply_markup=support_order_kb(order),
-    )
-    try:
-        await bot.send_message(
-            order.client_tg_id,
-            f"Саппорт подтвердил оплату по <b>{order.public_id}</b>.\n"
-            "Ожидайте выплату USDT от администратора.",
+    if not is_group_callback(callback):
+        await callback.message.answer(  # type: ignore[union-attr]
+            "Одобрено → очередь выплаты админу.\n\n" + staff_card(order),
             parse_mode="HTML",
+            reply_markup=support_order_kb(order),
         )
-    except Exception:
-        logger.exception("client notify approve failed")
+    await _notify_client(bot, order)
 
-    for admin_id in settings.admin_ids:
-        try:
-            await bot.send_message(
-                admin_id,
-                "💸 Нужна выплата USDT\n\n" + order.short_card(for_support=True),
-                parse_mode="HTML",
-            )
-        except Exception:
-            logger.exception("admin notify failed")
-    await callback.answer("Одобрено")
+    # Без рабочей группы — сообщаем админам в личку
+    if not panel.enabled:
+        for admin_id in settings.admin_ids:
+            try:
+                await bot.send_message(
+                    admin_id,
+                    "💸 Нужна выплата USDT\n\n" + staff_card(order),
+                    parse_mode="HTML",
+                )
+            except Exception:
+                logger.exception("admin notify failed")
+    await callback.answer("Одобрено → админу на выплату")
 
 
 @router.callback_query(F.data.startswith("support:reject:"))
 async def support_reject_start(
-    callback: CallbackQuery, state: FSMContext, settings: Settings, db: Database
+    callback: CallbackQuery,
+    state: FSMContext,
+    settings: Settings,
+    db: Database,
+    panel: StaffPanel,
+    bot: Bot,
 ) -> None:
-    if not _require_support(settings, callback.from_user.id):
-        await callback.answer("Нет доступа", show_alert=True)
-        return
-    order_id = int(callback.data.split(":")[-1])  # type: ignore[union-attr]
-    order = await db.get_order_by_id(order_id)
+    order = await _load_for_action(callback, settings, db, panel)
     if order is None:
-        await callback.answer("Не найдено", show_alert=True)
         return
-    await state.set_state(SupportNote.waiting)
-    await state.update_data(note_order_id=order.id, note_action="reject")
-    await callback.message.answer("Укажите причину отклонения чека:")  # type: ignore[union-attr]
-    await callback.answer()
+    await start_staff_input(
+        callback,
+        state,
+        bot,
+        new_state=SupportNote.waiting,
+        data={"note_order_id": order.id, "note_action": "reject"},
+        text=f"Заявка <b>{order.public_id}</b>\nУкажите причину отклонения чека:",
+    )
 
 
 @router.callback_query(F.data.startswith("support:repay:"))
@@ -350,14 +353,10 @@ async def support_repay(
     orders: OrderService,
     db: Database,
     bot: Bot,
+    panel: StaffPanel,
 ) -> None:
-    if not _require_support(settings, callback.from_user.id):
-        await callback.answer("Нет доступа", show_alert=True)
-        return
-    order_id = int(callback.data.split(":")[-1])  # type: ignore[union-attr]
-    order = await db.get_order_by_id(order_id)
+    order = await _load_for_action(callback, settings, db, panel)
     if order is None:
-        await callback.answer("Не найдено", show_alert=True)
         return
     try:
         order = await orders.support_request_new_payment(
@@ -366,21 +365,15 @@ async def support_repay(
     except OrderError as exc:
         await callback.answer(str(exc), show_alert=True)
         return
-    await callback.message.answer(  # type: ignore[union-attr]
-        "Клиенту запрошена повторная оплата/чек.\n\n"
-        + order.short_card(for_support=True),
-        parse_mode="HTML",
-        reply_markup=support_order_kb(order),
-    )
-    try:
-        await bot.send_message(
-            order.client_tg_id,
-            f"Саппорт просит повторно оплатить / прислать чек по <b>{order.public_id}</b>.",
+    if not is_group_callback(callback):
+        await callback.message.answer(  # type: ignore[union-attr]
+            "Клиенту запрошена повторная оплата/чек.\n\n"
+            + staff_card(order),
             parse_mode="HTML",
+            reply_markup=support_order_kb(order),
         )
-    except Exception:
-        logger.exception("repay notify failed")
-    await callback.answer()
+    await _notify_client(bot, order, "🔁 <b>Нужна повторная оплата или новый чек</b>\n\n")
+    await callback.answer("Клиенту запрошена повторная оплата")
 
 
 @router.callback_query(F.data.startswith("support:dispute:"))
@@ -389,17 +382,23 @@ async def support_dispute_or_cancel(
     callback: CallbackQuery,
     state: FSMContext,
     settings: Settings,
+    db: Database,
+    panel: StaffPanel,
+    bot: Bot,
 ) -> None:
-    if not _require_support(settings, callback.from_user.id):
-        await callback.answer("Нет доступа", show_alert=True)
+    order = await _load_for_action(callback, settings, db, panel)
+    if order is None:
         return
-    parts = callback.data.split(":")  # type: ignore[union-attr]
-    action, order_id = parts[1], int(parts[2])
-    await state.set_state(SupportNote.waiting)
-    await state.update_data(note_order_id=order_id, note_action=action)
+    action = callback.data.split(":")[1]  # type: ignore[union-attr]
     prompt = "Причина спора:" if action == "dispute" else "Причина отмены:"
-    await callback.message.answer(prompt)  # type: ignore[union-attr]
-    await callback.answer()
+    await start_staff_input(
+        callback,
+        state,
+        bot,
+        new_state=SupportNote.waiting,
+        data={"note_order_id": order.id, "note_action": action},
+        text=f"Заявка <b>{order.public_id}</b>\n{prompt}",
+    )
 
 
 @router.message(SupportNote.waiting)
@@ -427,18 +426,12 @@ async def support_note_finish(
             order = await orders.support_reject_receipt(
                 order, support_tg_id=message.from_user.id, note=reason
             )
-            client_msg = (
-                f"Саппорт отклонил чек по <b>{order.public_id}</b>.\nПричина: {reason}\n"
-                "Можете загрузить другой чек."
-            )
         elif action == "dispute":
             order = await orders.mark_disputed(order, reason=reason)
-            client_msg = f"Заявка <b>{order.public_id}</b> переведена в спор."
         else:
             order = await orders.cancel(
                 order, reason=reason, by_tg_id=message.from_user.id
             )
-            client_msg = f"Заявка <b>{order.public_id}</b> отменена.\nПричина: {reason}"
     except OrderError as exc:
         await message.answer(str(exc))
         await state.clear()
@@ -446,14 +439,12 @@ async def support_note_finish(
 
     await state.clear()
     await message.answer(
-        order.short_card(for_support=True),
+        staff_card(order),
         parse_mode="HTML",
         reply_markup=support_order_kb(order),
     )
-    try:
-        await bot.send_message(order.client_tg_id, client_msg, parse_mode="HTML")
-    except Exception:
-        logger.exception("support note client notify failed")
+    # Причина (отклонения чека / отмены) уже есть в карточке
+    await _notify_client(bot, order)
 
 
 @router.callback_query(F.data.startswith("support:receipt:"))
@@ -468,9 +459,4 @@ async def support_show_receipt(
     if order is None or not order.receipt_file_id:
         await callback.answer("Чека нет", show_alert=True)
         return
-    await bot.send_document(
-        callback.from_user.id,
-        document=order.receipt_file_id,
-        caption=f"Чек {order.public_id}",
-    )
-    await callback.answer()
+    await send_receipt(callback, bot, order, support_order_kb(order))

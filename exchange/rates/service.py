@@ -17,6 +17,7 @@ from exchange.rates.pricing import (
     compute_client_quote,
     effective_cc_cost,
     margin_percent,
+    round_usdt_amount,
 )
 from exchange.rates.samples import RateSampleStore
 from exchange.rates.sources import fetch_cryptocards_rate, fetch_rapira_usdt_rub
@@ -72,21 +73,21 @@ class RateSnapshot:
 
     def summary_html(self) -> str:
         """Подробности для саппорта/админа."""
-        rapira = f"{self.rapira:.4f}" if self.rapira is not None else "—"
-        cc = f"{self.cryptocards:.4f}" if self.cryptocards is not None else "—"
-        nth = f"{self.bybit_nth:.4f}" if self.bybit_nth is not None else "—"
+        rapira = f"{self.rapira:.2f}" if self.rapira is not None else "—"
+        cc = f"{self.cryptocards:.2f}" if self.cryptocards is not None else "—"
+        nth = f"{self.bybit_nth:.2f}" if self.bybit_nth is not None else "—"
         lines = [
             f"Режим: <b>{self.mode}</b> ({self.formula})",
-            f"Rapira: <b>{rapira}</b> ₽/USDT",
-            f"CryptoCards (закуп): <b>{cc}</b> ₽/USDT",
+            f"Rapira: <b>{rapira}</b> ₽ за 1 USDT",
+            f"CryptoCards (закуп): <b>{cc}</b> ₽ за 1 USDT",
         ]
         if self.bybit_nth is not None or self.cc_samples_today:
             lines.append(f"Bybit Сбер #20 (сейчас): <b>{nth}</b>")
             if self.cc_samples_today:
                 lines.append(f"Семплов CC-логики за сутки: {self.cc_samples_today}")
         if self.effective_cost is not None:
-            lines.append(f"Себестоимость (CC − edge): <b>{self.effective_cost:.4f}</b>")
-        lines.append(f"Курс клиенту (база): <b>{self.client:.4f}</b>")
+            lines.append(f"Себестоимость (CC − edge): <b>{self.effective_cost:.2f}</b>")
+        lines.append(f"Курс клиенту (база): <b>{self.client:.2f}</b>")
         if self.expected_margin_percent is not None:
             lines.append(
                 f"Маржа к закупу: <b>{self.expected_margin_percent:.2f}%</b>"
@@ -134,7 +135,7 @@ class RateService:
 
     def rub_to_usdt(self, amount_rub: float) -> float:
         quote = self.quote_for_amount(amount_rub)
-        return round(amount_rub / quote.suggested_rate, 6)
+        return round_usdt_amount(amount_rub / quote.suggested_rate)
 
     def snapshot(self) -> RateSnapshot:
         return self._snapshot

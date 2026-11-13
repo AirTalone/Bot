@@ -23,6 +23,18 @@ def combine_rates_legacy(
     return max(values), "max"
 
 
+def round_usdt_amount(value: float) -> float:
+    """
+    Сумма USDT к выплате клиенту.
+    Обычно до десятых (229.2789 → 229.3). Если при округлении до десятых
+    клиент теряет больше 0.02 USDT — до сотых (229.2449 → 229.24).
+    """
+    tenths = round(float(value), 1)
+    if value - tenths > 0.02:
+        return round(float(value), 2)
+    return tenths
+
+
 def effective_cc_cost(cryptocards: float, cc_edge_percent: float) -> float:
     """Себестоимость 1 USDT: курс CC минус макс. чистый доход с площадки."""
     edge = max(0.0, float(cc_edge_percent)) / 100.0
@@ -94,10 +106,10 @@ class RateQuote:
         }
 
     def support_block_html(self, *, final_rate: float | None = None) -> str:
-        rapira = f"{self.rapira:.4f}" if self.rapira is not None else "—"
-        cc = f"{self.cryptocards:.4f}" if self.cryptocards is not None else "—"
+        rapira = f"{self.rapira:.2f}" if self.rapira is not None else "—"
+        cc = f"{self.cryptocards:.2f}" if self.cryptocards is not None else "—"
         cost = (
-            f"{self.effective_cost:.4f}" if self.effective_cost is not None else "—"
+            f"{self.effective_cost:.2f}" if self.effective_cost is not None else "—"
         )
         rate = final_rate if final_rate is not None else self.suggested_rate
         margin = self.margin_percent
@@ -118,8 +130,8 @@ class RateQuote:
             f"Rapira: <b>{rapira}</b>",
             f"CryptoCards (закуп): <b>{cc}</b>",
             f"Себестоимость (CC − edge): <b>{cost}</b>",
-            f"Предложенный курс: <b>{self.suggested_rate:.4f}</b> ({self.formula})",
-            f"Итоговый курс: <b>{rate:.4f}</b>",
+            f"Предложенный курс: <b>{self.suggested_rate:.2f}</b> ({self.formula})",
+            f"Итоговый курс: <b>{rate:.2f}</b>",
             f"Маржа: <b>{margin_s}</b> (мин. {self.min_margin_percent:.2f}%) — {verdict}",
         ]
         if self.amount_discount_rub > 0:
@@ -180,6 +192,9 @@ def compute_client_quote(
         suggested = float(fallback_rate)
         formula = "fallback"
 
+    # Курс клиенту — до сотых: показанный курс = курс, по которому считаются USDT
+    suggested = round(suggested, 2)
+
     cost = effective_cc_cost(cc, cc_edge_percent) if cc is not None else None
     margin = margin_percent(suggested, cost) if cost is not None else None
     margin_ok: bool | None
@@ -194,7 +209,7 @@ def compute_client_quote(
         amount_rub=float(amount_rub),
         markup_rub=float(markup_rub),
         amount_discount_rub=discount,
-        suggested_rate=round(suggested, 4),
+        suggested_rate=suggested,
         effective_cost=round(cost, 4) if cost is not None else None,
         margin_percent=round(margin, 4) if margin is not None else None,
         min_margin_percent=min_m,

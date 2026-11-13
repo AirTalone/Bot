@@ -17,12 +17,19 @@ def _parse_id_set(raw: str) -> frozenset[int]:
     return frozenset(ids)
 
 
+def _parse_optional_int(raw: str) -> int | None:
+    raw = (raw or "").strip()
+    return int(raw) if raw else None
+
+
 @dataclass(frozen=True)
 class Settings:
     bot_token: str
     database_path: Path
     admin_ids: frozenset[int]
     support_ids: frozenset[int]
+    # Рабочая группа сотрудников: туда приходят карточки заявок. None — по-старому, в личку.
+    staff_chat_id: int | None
     usdt_rate_rub: float
     spread_percent: float
     min_amount_rub: float
@@ -94,10 +101,11 @@ def load_settings() -> Settings:
         database_path=Path(db),
         admin_ids=_parse_id_set(os.getenv("ADMIN_IDS", "")),
         support_ids=_parse_id_set(os.getenv("SUPPORT_IDS", "")),
+        staff_chat_id=_parse_optional_int(os.getenv("STAFF_CHAT_ID", "")),
         usdt_rate_rub=float(os.getenv("USDT_RATE_RUB", "90")),
         spread_percent=float(os.getenv("SPREAD_PERCENT", "2")),
-        min_amount_rub=float(os.getenv("MIN_AMOUNT_RUB", "1000")),
-        max_amount_rub=float(os.getenv("MAX_AMOUNT_RUB", "500000")),
+        min_amount_rub=float(os.getenv("MIN_AMOUNT_RUB", "3000")),
+        max_amount_rub=float(os.getenv("MAX_AMOUNT_RUB", "150000")),
         payment_ttl_minutes=int(os.getenv("PAYMENT_TTL_MINUTES", "20")),
         receipt_provider=os.getenv("RECEIPT_PROVIDER", "mock").strip().lower(),
         receipt_api_url=os.getenv("RECEIPT_API_URL", "").strip(),

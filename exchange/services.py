@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 from dataclasses import dataclass
+from typing import Awaitable, Callable
 
 from exchange.config import Settings
 from exchange.db import Database
 from exchange.models import Order, Requisites, iso, utcnow
 from exchange.rates import RateService
-from exchange.rates.pricing import compute_client_quote, reevaluate_margin
+from exchange.rates.pricing import (
+    compute_client_quote,
+    reevaluate_margin,
+    round_usdt_amount,
+)
 from exchange.receipt.base import ReceiptCheckResult, ReceiptChecker
 from exchange.statuses import OrderStatus, can_transition
 
@@ -21,12 +27,45 @@ class OrderError(Exception):
     """Ошибка доменной операции."""
 
 
+OnChange = Callable[[Order], Awaitable[None]]
+
+
+def _notifies(method):
+    """
+    После успешной операции сообщить подписчику (панель сотрудников) об изменении.
+    Метод может вернуть Order, (Order, …) или список Order.
+    """
+
+    @functools.wraps(method)
+    async def wrapper(self: "OrderService", *args, **kwargs):
+        result = await method(self, *args, **kwargs)
+        if isinstance(result, Order):
+            changed = [result]
+        elif isinstance(result, tuple) and result and isinstance(result[0], Order):
+            changed = [result[0]]
+        elif isinstance(result, list):
+            changed = [o for o in result if isinstance(o, Order)]
+        else:
+            changed = []
+        if self.on_change is not None:
+            for order in changed:
+                try:
+                    await self.on_change(order)
+                except Exception:
+                    logger.exception("on_change failed for %s", order.public_id)
+        return result
+
+    return wrapper
+
+
 @dataclass
 class OrderService:
     db: Database
     settings: Settings
     receipt_checker: ReceiptChecker
     rates: RateService | None = None
+    # Вызывается после каждого изменения заявки (обновить карточку в группе)
+    on_change: OnChange | None = None
 
     def _quote_for_amount(self, amount_rub: float):
         if self.rates is not None:
@@ -46,6 +85,7 @@ class OrderService:
             min_margin_percent_40k=self.settings.min_margin_percent_40k,
         )
 
+    @_notifies
     async def create_order(
         self,
         *,
@@ -76,7 +116,7 @@ class OrderService:
 
         quote = self._quote_for_amount(amount_rub)
         rate = quote.suggested_rate
-        amount_usdt = round(amount_rub / rate, 6)
+        amount_usdt = round_usdt_amount(amount_rub / rate)
         return await self.db.create_order(
             client_tg_id=client_tg_id,
             client_username=client_username,
@@ -87,6 +127,7 @@ class OrderService:
             extra=quote.to_extra(),
         )
 
+    @_notifies
     async def set_client_rate(
         self,
         order: Order,
@@ -97,10 +138,11 @@ class OrderService:
         """Саппорт ставит итоговый курс до выдачи реквизитов (или пока заявка жива)."""
         if order.status in {OrderStatus.COMPLETED, OrderStatus.CANCELLED}:
             raise OrderError("Нельзя менять курс у закрытой заявки")
+        rate = round(rate, 2)
         if rate <= 0:
             raise OrderError("Курс должен быть > 0")
 
-        amount_usdt = round(order.amount_rub / rate, 6)
+        amount_usdt = round_usdt_amount(order.amount_rub / rate)
         extra = dict(order.extra or {})
         cc = extra.get("cryptocards")
         try:
@@ -135,6 +177,7 @@ class OrderService:
             extra=extra,
         )
 
+    @_notifies
     async def set_usdt_address(self, order: Order, *, usdt_address: str) -> Order:
         if order.status in {OrderStatus.COMPLETED, OrderStatus.CANCELLED}:
             raise OrderError("Нельзя менять адрес у закрытой заявки")
@@ -150,6 +193,7 @@ class OrderService:
                 f"в {new_status.value}"
             )
 
+    @_notifies
     async def assign_requisites(
         self,
         order: Order,
@@ -167,6 +211,7 @@ class OrderService:
             ttl_minutes=self.settings.payment_ttl_minutes,
         )
 
+    @_notifies
     async def cancel(
         self,
         order: Order,
@@ -195,6 +240,7 @@ class OrderService:
             cancel_reason=note,
         )
 
+    @_notifies
     async def mark_disputed(self, order: Order, *, reason: str) -> Order:
         await self._transition(order, OrderStatus.DISPUTED)
         return await self.db.update_fields(
@@ -203,6 +249,7 @@ class OrderService:
             support_note=reason,
         )
 
+    @_notifies
     async def submit_receipt(
         self,
         order: Order,
@@ -262,6 +309,7 @@ class OrderService:
             )
         return order, result
 
+    @_notifies
     async def support_approve(
         self,
         order: Order,
@@ -287,6 +335,7 @@ class OrderService:
             support_note=note or order.support_note,
         )
 
+    @_notifies
     async def support_reject_receipt(
         self,
         order: Order,
@@ -305,6 +354,7 @@ class OrderService:
             receipt_check_message=note,
         )
 
+    @_notifies
     async def support_request_new_payment(
         self,
         order: Order,
@@ -326,6 +376,7 @@ class OrderService:
             receipt_check_message=None,
         )
 
+    @_notifies
     async def admin_complete_payout(
         self,
         order: Order,
@@ -349,5 +400,6 @@ class OrderService:
             payout_at=iso(utcnow()),
         )
 
+    @_notifies
     async def expire_overdue(self) -> list[Order]:
         return await self.db.expire_overdue()

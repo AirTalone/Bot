@@ -10,6 +10,7 @@ from exchange.config import Settings
 from exchange.db import Database
 from exchange.rates import RateService
 from exchange.services import OrderService
+from exchange.staff_panel import StaffPanel
 
 
 @dataclass
@@ -18,6 +19,7 @@ class AppContext:
     db: Database
     orders: OrderService
     rates: RateService
+    panel: StaffPanel
 
 
 class ContextMiddleware(BaseMiddleware):
@@ -35,4 +37,5 @@ class ContextMiddleware(BaseMiddleware):
         data["orders"] = self.ctx.orders
         data["db"] = self.ctx.db
         data["rates"] = self.ctx.rates
+        data["panel"] = self.ctx.panel
         return await handler(event, data)

@@ -4,3 +4,5 @@ Pillow==11.0.0
 aiohttp==3.10.10
 aiosqlite==0.20.0
 python-dotenv==1.0.1
+# Часовые пояса (Europe/Moscow) — нужны только на Windows, на Linux они встроены
+tzdata==2024.2; sys_platform == "win32"

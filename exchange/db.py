@@ -52,6 +52,22 @@ CREATE TABLE IF NOT EXISTS orders (
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_orders_client ON orders(client_tg_id);
 CREATE INDEX IF NOT EXISTS idx_orders_deadline ON orders(payment_deadline_at);
+
+-- Карточка заявки в рабочей группе сотрудников (одно сообщение на заявку)
+CREATE TABLE IF NOT EXISTS staff_cards (
+    order_id INTEGER PRIMARY KEY,
+    chat_id INTEGER NOT NULL,
+    message_id INTEGER NOT NULL,
+    status TEXT NOT NULL
+);
+
+-- Кто из сотрудников ведёт заявку (кнопка «Взять»)
+CREATE TABLE IF NOT EXISTS order_owners (
+    order_id INTEGER PRIMARY KEY,
+    tg_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    taken_at TEXT NOT NULL
+);
 """
 
 
@@ -280,6 +296,87 @@ class Database:
             requisites_at=iso(now),
             payment_deadline_at=iso(deadline),
         )
+
+    async def list_orders_since(self, since: datetime) -> list[Order]:
+        """Заявки, созданные начиная с момента since (для статистики)."""
+        cursor = await self.conn.execute(
+            "SELECT * FROM orders WHERE created_at >= ? ORDER BY id ASC",
+            (iso(since),),
+        )
+        rows = await cursor.fetchall()
+        return [_row_to_order(r) for r in rows]
+
+    # ----- Карточки в группе сотрудников -----
+
+    async def get_staff_card(self, order_id: int) -> tuple[int, int, str] | None:
+        """(chat_id, message_id, status) или None."""
+        cursor = await self.conn.execute(
+            "SELECT chat_id, message_id, status FROM staff_cards WHERE order_id = ?",
+            (order_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        return int(row["chat_id"]), int(row["message_id"]), str(row["status"])
+
+    async def set_staff_card(
+        self, order_id: int, *, chat_id: int, message_id: int, status: str
+    ) -> None:
+        await self.conn.execute(
+            """
+            INSERT INTO staff_cards (order_id, chat_id, message_id, status)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(order_id) DO UPDATE SET
+                chat_id = excluded.chat_id,
+                message_id = excluded.message_id,
+                status = excluded.status
+            """,
+            (order_id, chat_id, message_id, status),
+        )
+        await self.conn.commit()
+
+    # ----- Кто ведёт заявку -----
+
+    async def get_owner(self, order_id: int) -> tuple[int, str] | None:
+        """(tg_id, имя) сотрудника, который ведёт заявку, или None."""
+        cursor = await self.conn.execute(
+            "SELECT tg_id, name FROM order_owners WHERE order_id = ?", (order_id,)
+        )
+        row = await cursor.fetchone()
+        return (int(row["tg_id"]), str(row["name"])) if row else None
+
+    async def take_order(self, order_id: int, *, tg_id: int, name: str) -> tuple[int, str]:
+        """
+        Закрепить заявку за сотрудником, если она свободна.
+        Возвращает фактического владельца (если успел другой — его).
+        """
+        await self.conn.execute(
+            """
+            INSERT OR IGNORE INTO order_owners (order_id, tg_id, name, taken_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (order_id, tg_id, name, iso(utcnow())),
+        )
+        await self.conn.commit()
+        owner = await self.get_owner(order_id)
+        assert owner is not None
+        return owner
+
+    async def release_order(self, order_id: int) -> None:
+        await self.conn.execute("DELETE FROM order_owners WHERE order_id = ?", (order_id,))
+        await self.conn.commit()
+
+    async def owners_for(self, order_ids: Iterable[int]) -> dict[int, tuple[int, str]]:
+        ids = list(order_ids)
+        if not ids:
+            return {}
+        placeholders = ",".join("?" for _ in ids)
+        cursor = await self.conn.execute(
+            f"SELECT order_id, tg_id, name FROM order_owners WHERE order_id IN ({placeholders})",
+            ids,
+        )
+        rows = await cursor.fetchall()
+        return {int(r["order_id"]): (int(r["tg_id"]), str(r["name"])) for r in rows}
 
     async def expire_overdue(self, now: datetime | None = None) -> list[Order]:
         now = now or utcnow()

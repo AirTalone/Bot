@@ -3,13 +3,22 @@ from __future__ import annotations
 import logging
 
 from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
+from exchange.client_card import client_card, fmt_rub, fmt_usdt
 from exchange.config import Settings
+from exchange.staff_card import staff_card
 from exchange.db import Database
-from exchange.keyboards import client_main_kb, client_order_kb, client_skip_address_kb
+from exchange.handlers.common import welcome_text
+from exchange.keyboards import (
+    client_back_kb,
+    client_main_kb,
+    client_order_kb,
+    client_skip_address_kb,
+)
 from exchange.rates import RateService
 from exchange.services import OrderError, OrderService
 from exchange.states import ClientCreateOrder, ClientUploadReceipt
@@ -38,12 +47,58 @@ async def start_exchange(
 ) -> None:
     await state.set_state(ClientCreateOrder.amount)
     await message.answer(
-        f"Введите сумму в рублях.\n"
-        f"Лимит: {settings.min_amount_rub:.0f}–{settings.max_amount_rub:.0f} ₽\n"
-        f"Курс сейчас: <b>{rates.client_rate():.4f}</b> ₽/USDT\n\n"
-        f"Или /cancel чтобы отменить ввод.",
+        _amount_prompt(settings, rates),
+        parse_mode="HTML",
+        reply_markup=client_back_kb(),
+    )
+
+
+def _amount_prompt(settings: Settings, rates: RateService, error: str = "") -> str:
+    """Экран «Сколько рублей хотите обменять?» (с ошибкой сверху, если ввели не то)."""
+    lines = [
+        f"Курс: <b>{rates.client_rate():.2f} ₽</b> за 1 USDT",
+        f"Сумма: от {fmt_rub(settings.min_amount_rub)} "
+        f"до {fmt_rub(settings.max_amount_rub)} ₽",
+    ]
+    if settings.amount_discount_30k > 0:
+        lines.append(
+            f"Свыше {fmt_rub(settings.amount_tier_30k)} ₽ — курс лучше "
+            f"на {settings.amount_discount_30k:g} ₽"
+        )
+    if settings.amount_discount_40k > 0:
+        lines.append(
+            f"Свыше {fmt_rub(settings.amount_tier_40k)} ₽ — курс лучше "
+            f"на {settings.amount_discount_40k:g} ₽"
+        )
+    text = (
+        "💰 <b>Сколько рублей хотите обменять?</b>\n\n"
+        "<blockquote>" + "\n".join(lines) + "</blockquote>\n\n"
+        "Напишите сумму числом, например: 15000"
+    )
+    if error:
+        text = f"⚠️ {error}\n\n" + text
+    return text
+
+
+@router.callback_query(F.data == "client:back")
+async def back_to_menu(
+    callback: CallbackQuery, state: FSMContext, settings: Settings, rates: RateService
+) -> None:
+    # 1. Бот перестаёт ждать от клиента сумму
+    await state.clear()
+    # 2. Убираем кнопку из старого сообщения, чтобы её не нажали второй раз
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)  # type: ignore[union-attr]
+    except Exception:
+        pass
+    # 3. Показываем главное меню (то же, что по /start)
+    await callback.message.answer(  # type: ignore[union-attr]
+        welcome_text(settings, callback.from_user.id, rates),
+        reply_markup=client_main_kb(),
         parse_mode="HTML",
     )
+    # 4. Сообщаем Telegram, что нажатие обработано (иначе на кнопке крутятся «часики»)
+    await callback.answer()
 
 
 @router.message(Command("cancel"), StateFilter(ClientCreateOrder, ClientUploadReceipt))
@@ -57,16 +112,22 @@ async def process_amount(
     message: Message, state: FSMContext, settings: Settings, rates: RateService
 ) -> None:
     amount = _parse_amount(message.text or "")
+    error = ""
     if amount is None:
-        await message.answer("Нужна сумма числом, например: 15000")
-        return
-    if amount < settings.min_amount_rub or amount > settings.max_amount_rub:
+        error = "Не получилось распознать сумму. Напишите только число."
+    elif amount < settings.min_amount_rub:
+        error = f"Минимальная сумма — {fmt_rub(settings.min_amount_rub)} ₽."
+    elif amount > settings.max_amount_rub:
+        error = f"Максимальная сумма — {fmt_rub(settings.max_amount_rub)} ₽."
+    if error:
         await message.answer(
-            f"Сумма вне лимита {settings.min_amount_rub:.0f}–{settings.max_amount_rub:.0f} ₽"
+            _amount_prompt(settings, rates, error),
+            parse_mode="HTML",
+            reply_markup=client_back_kb(),
         )
         return
     quote = rates.quote_for_amount(amount)
-    usdt = round(amount / quote.suggested_rate, 6)
+    usdt = amount / quote.suggested_rate
     await state.update_data(amount_rub=amount)
     await state.set_state(ClientCreateOrder.address)
     discount_note = ""
@@ -75,9 +136,9 @@ async def process_amount(
             f"\nСкидка по сумме: −{quote.amount_discount_rub:g} к курсу"
         )
     await message.answer(
-        f"Сумма: <b>{amount:.2f} ₽</b>\n"
-        f"Курс: <b>{quote.suggested_rate:.4f}</b> ₽/USDT{discount_note}\n"
-        f"≈ <b>{usdt:.4f} USDT</b>\n\n"
+        f"Сумма: <b>{fmt_rub(amount)} ₽</b>\n"
+        f"Курс: <b>{quote.suggested_rate:.2f} ₽</b> за 1 USDT{discount_note}\n"
+        f"≈ <b>{fmt_usdt(usdt)} USDT</b>\n\n"
         "Пришлите адрес USDT (TRC-20)\n"
         "или нажмите «Указать позже».",
         parse_mode="HTML",
@@ -124,17 +185,8 @@ async def _finish_create_order(
         return
 
     await state.clear()
-    extra = ""
-    if not order.has_usdt_address:
-        extra = (
-            "\n\nАдрес USDT пока не указан — его можно добавить позже "
-            "кнопкой «Указать кошелёк USDT»."
-        )
     await answer(
-        "Заявка создана.\n\n"
-        + order.short_card()
-        + "\n\nСаппорт подберёт реквизиты. Обычно это несколько минут."
-        + extra,
+        client_card(order),
         parse_mode="HTML",
         reply_markup=client_order_kb(order),
     )
@@ -200,8 +252,10 @@ async def process_address(
 async def _notify_staff_new_order(bot: Bot, settings: Settings, order) -> None:
     from exchange.keyboards import support_order_kb
 
+    if settings.staff_chat_id is not None:
+        return  # есть рабочая группа — карточка придёт туда
     targets = set(settings.support_ids) | set(settings.admin_ids)
-    text = "🆕 Новая заявка — нужны реквизиты\n\n" + order.short_card(for_support=True)
+    text = "🆕 Новая заявка — нужны реквизиты\n\n" + staff_card(order)
     for tg_id in targets:
         try:
             await bot.send_message(
@@ -225,7 +279,7 @@ async def my_orders(message: Message, db: Database) -> None:
         return
     for order in items:
         await message.answer(
-            order.short_card(),
+            client_card(order),
             parse_mode="HTML",
             reply_markup=client_order_kb(order),
         )
@@ -238,12 +292,24 @@ async def client_status(callback: CallbackQuery, db: Database) -> None:
     if order is None or callback.from_user.id != order.client_tg_id:
         await callback.answer("Заявка не найдена", show_alert=True)
         return
-    await callback.message.answer(  # type: ignore[union-attr]
-        order.short_card(),
-        parse_mode="HTML",
-        reply_markup=client_order_kb(order),
-    )
-    await callback.answer()
+    # Обновляем это же сообщение, а не шлём новое
+    try:
+        await callback.message.edit_text(  # type: ignore[union-attr]
+            client_card(order),
+            parse_mode="HTML",
+            reply_markup=client_order_kb(order),
+        )
+    except TelegramBadRequest as exc:
+        if "message is not modified" in str(exc):
+            await callback.answer("Статус не изменился")
+            return
+        # Старое сообщение нельзя отредактировать — присылаем новое
+        await callback.message.answer(  # type: ignore[union-attr]
+            client_card(order),
+            parse_mode="HTML",
+            reply_markup=client_order_kb(order),
+        )
+    await callback.answer("Обновлено")
 
 
 @router.callback_query(F.data.startswith("client:cancel:"))
@@ -263,8 +329,9 @@ async def client_cancel(
         await callback.answer(str(exc), show_alert=True)
         return
     await callback.message.answer(  # type: ignore[union-attr]
-        "Заявка отменена.\n\n" + order.short_card(),
+        client_card(order),
         parse_mode="HTML",
+        reply_markup=client_order_kb(order),
     )
     await callback.answer("Отменено")
 
@@ -341,7 +408,7 @@ async def client_upload_file(
     else:
         file_bytes = buffer.read() if hasattr(buffer, "read") else bytes(buffer)
 
-    await message.answer("Чек получен, запускаю автопроверку…")
+    wait_msg = await message.answer("Чек получен, запускаю автопроверку…")
     try:
         order, result = await orders.submit_receipt(
             order,
@@ -354,35 +421,33 @@ async def client_upload_file(
     except OrderError as exc:
         await message.answer(str(exc))
         return
+    finally:
+        # Промежуточное сообщение заменяется результатом
+        try:
+            await wait_msg.delete()
+        except Exception:
+            pass
 
     await state.clear()
 
-    if result.ok:
-        text = (
-            "✅ Автопроверка пройдена. Заявка ушла саппорту на подтверждение.\n\n"
-            + order.short_card()
-        )
-    else:
-        text = (
-            "⚠️ Автопроверка не прошла.\n"
-            f"Причина: {result.message}\n"
-            "Можете загрузить другой чек или дождаться решения саппорта.\n\n"
-            + order.short_card()
-        )
-
-    await message.answer(text, parse_mode="HTML", reply_markup=client_order_kb(order))
+    # Статус и причина (если чек не прошёл) уже есть в карточке
+    await message.answer(
+        client_card(order), parse_mode="HTML", reply_markup=client_order_kb(order)
+    )
     await _notify_staff_receipt(bot, settings, order, result.ok, result.message)
 
 
 async def _notify_staff_receipt(
     bot: Bot, settings: Settings, order, ok: bool, message: str
 ) -> None:
+    if settings.staff_chat_id is not None:
+        return  # есть рабочая группа — карточка там «всплывёт» с уведомлением
     mark = "✅" if ok else "⚠️"
     text = (
         f"{mark} Чек по {order.public_id}\n"
         f"Автопроверка: {'passed' if ok else 'failed'}\n"
         f"{message}\n\n"
-        + order.short_card()
+        + staff_card(order)
     )
     for tg_id in set(settings.support_ids) | set(settings.admin_ids):
         try:

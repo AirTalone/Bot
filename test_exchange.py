@@ -21,6 +21,7 @@ def _settings(**overrides) -> Settings:
         database_path=Path(":memory:"),
         admin_ids=frozenset({1}),
         support_ids=frozenset({2}),
+        staff_chat_id=None,
         usdt_rate_rub=100.0,
         spread_percent=0.0,
         min_amount_rub=1000.0,
@@ -108,7 +109,7 @@ class OrderServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(order.status, OrderStatus.AWAITING_REQUISITES)
         # static fallback: USDT_RATE_RUB + markup (100 + 1)
         self.assertAlmostEqual(order.rate, 101.0)
-        self.assertAlmostEqual(order.amount_usdt, round(5000 / 101.0, 6))
+        self.assertAlmostEqual(order.amount_usdt, 49.5)  # 49.50495 → до десятых
 
         order = await self.orders.assign_requisites(
             order,
@@ -334,6 +335,329 @@ class MockReceiptTests(unittest.IsolatedAsyncioTestCase):
             order_public_id="EX-1",
         )
         self.assertFalse(bad.ok)
+
+
+class UsdtRoundingTests(unittest.TestCase):
+    def test_round_usdt_amount(self) -> None:
+        from exchange.client_card import fmt_usdt
+        from exchange.rates.pricing import round_usdt_amount
+
+        self.assertAlmostEqual(round_usdt_amount(229.2789), 229.3)
+        self.assertAlmostEqual(round_usdt_amount(286.5986), 286.6)
+        self.assertAlmostEqual(round_usdt_amount(229.2149), 229.2)  # теряет 0.015 — ок
+        self.assertAlmostEqual(round_usdt_amount(229.2449), 229.24)  # теряет бы 0.045
+        self.assertEqual(fmt_usdt(229.2789), "229.3")
+        self.assertEqual(fmt_usdt(229.2449), "229.24")
+        self.assertEqual(fmt_usdt(229.0), "229")
+
+
+class ClientCardTests(unittest.TestCase):
+    def _order(self, status, **kw):
+        from datetime import datetime, timezone
+
+        from exchange.models import Order
+
+        now = datetime(2026, 11, 13, 4, 0, tzinfo=timezone.utc)
+        base = dict(
+            id=1,
+            public_id="EX-ZZV21I",
+            client_tg_id=10,
+            client_username="client",
+            amount_rub=25000.0,
+            amount_usdt=286.5986,
+            rate=87.23,
+            usdt_address="",
+            status=status,
+            created_at=now,
+            updated_at=now,
+        )
+        base.update(kw)
+        return Order(**base)
+
+    def test_all_statuses_both_styles(self) -> None:
+        from exchange.client_card import client_card
+
+        for status in OrderStatus:
+            for style in ("minimal", "steps"):
+                text = client_card(self._order(status), style=style)
+                self.assertIn("EX-ZZV21I", text)
+                self.assertIn("25 000 ₽", text)
+                self.assertIn("87.23", text)
+
+    def test_payment_shows_requisites_msk_and_escapes(self) -> None:
+        from datetime import datetime, timezone
+
+        from exchange.client_card import client_card
+
+        order = self._order(
+            OrderStatus.AWAITING_PAYMENT,
+            requisites_bank="Сбер",
+            requisites_detail="+7900<1>",
+            requisites_holder="Иван И.",
+            payment_deadline_at=datetime(2026, 11, 13, 4, 20, tzinfo=timezone.utc),
+        )
+        text = client_card(order, style="minimal")
+        self.assertIn("+7900&lt;1&gt;", text)
+        self.assertIn("07:20", text)  # 04:20 UTC = 07:20 МСК
+        self.assertIn("<code>25000</code>", text)
+
+    def test_cancel_reason_hides_tech_id(self) -> None:
+        from exchange.client_card import client_card
+
+        order = self._order(
+            OrderStatus.CANCELLED, cancel_reason="Отменена клиентом (by 123456)"
+        )
+        text = client_card(order)
+        self.assertIn("Отменена клиентом", text)
+        self.assertNotIn("123456", text)
+
+
+class ScreenTrackerTests(unittest.TestCase):
+    """«Один экран»: новый шаг пользователя удаляет прошлые сообщения бота."""
+
+    def setUp(self) -> None:
+        from exchange.screen import ScreenTracker, Step
+
+        self.Step = Step
+        self.t = ScreenTracker()
+
+    def send(self, step, mid, *, chat=10, menu=False):
+        return self.t.register_sent(
+            step=step, chat_id=chat, message_id=mid, is_menu=menu
+        )
+
+    def test_new_step_replaces_previous(self) -> None:
+        s1 = self.Step(chat_id=10)
+        self.assertEqual(self.send(s1, 1), [])
+        s2 = self.Step(chat_id=10)
+        self.assertEqual(self.send(s2, 2), [1])
+
+    def test_several_messages_in_one_step_kept_together(self) -> None:
+        s1 = self.Step(chat_id=10)
+        self.send(s1, 1)
+        self.assertEqual(self.send(s1, 2), [])
+        self.assertEqual(self.send(s1, 3), [])
+        s2 = self.Step(chat_id=10)
+        self.assertEqual(self.send(s2, 4), [1, 2, 3])
+
+    def test_pressed_message_is_replaced(self) -> None:
+        # Нажали кнопку на уведомлении (id 50), которое не было «шагом»
+        step = self.Step(chat_id=10, pressed_message_id=50)
+        self.assertEqual(self.send(step, 51), [50])
+
+    def test_user_text_deleted_with_reply(self) -> None:
+        self.send(self.Step(chat_id=10), 1)
+        # Клиент написал сумму (id 2) → бот ответил → удаляются прошлый ответ и сумма
+        step = self.Step(chat_id=10, user_message_id=2)
+        self.assertEqual(self.send(step, 3), [1, 2])
+
+    def test_notifications_not_tracked(self) -> None:
+        # Саппорт (чат 20) выдаёт реквизиты → сообщение в чат клиента (10)
+        support_step = self.Step(chat_id=20)
+        self.assertEqual(self.send(support_step, 7, chat=10), [])
+        # Фон (expire_loop) — шага нет
+        self.assertEqual(self.send(None, 8, chat=10), [])
+        # Следующий шаг клиента не удаляет уведомления
+        self.assertEqual(self.send(self.Step(chat_id=10), 9), [])
+
+    def test_menu_message_kept_until_next_menu(self) -> None:
+        self.send(self.Step(chat_id=10), 1, menu=True)  # /start
+        # Следующий шаг не удаляет сообщение с клавиатурой меню
+        self.assertEqual(self.send(self.Step(chat_id=10), 2), [])
+        # Новое меню заменяет старое меню и прошлый шаг
+        self.assertEqual(
+            sorted(self.send(self.Step(chat_id=10), 3, menu=True)), [1, 2]
+        )
+
+
+class ScreenGroupTests(unittest.TestCase):
+    def test_group_button_never_deletes_in_group(self) -> None:
+        from exchange.screen import ScreenTracker, Step
+
+        t = ScreenTracker()
+        group, staff = -100500, 77
+        # Сотрудник нажал кнопку на карточке в группе (сообщение 5)
+        step = Step(chat_id=group, user_id=staff)
+        # Обновлённая карточка уходит в группу — не трекается, ничего не удаляет
+        self.assertEqual(t.register_sent(step=step, chat_id=group, message_id=6, is_menu=False), [])
+        # Вопрос ушёл в личку сотрудника — трекается как его экран
+        self.assertEqual(t.register_sent(step=step, chat_id=staff, message_id=1, is_menu=False), [])
+        # Следующий шаг в личке заменяет этот вопрос
+        step2 = Step(chat_id=staff, user_message_id=2)
+        self.assertEqual(
+            t.register_sent(step=step2, chat_id=staff, message_id=3, is_menu=False), [1, 2]
+        )
+
+
+class StaffPanelTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        from exchange.staff_panel import StaffPanel
+
+        self.tmp = tempfile.TemporaryDirectory()
+        db_path = Path(self.tmp.name) / "t.db"
+        self.settings = _settings(database_path=db_path, staff_chat_id=-100500)
+        self.db = Database(db_path)
+        await self.db.connect()
+
+        self.calls: list[tuple] = []
+        calls = self.calls
+        counter = iter(range(1000, 2000))
+
+        class FakeMsg:
+            def __init__(self, mid):
+                self.message_id = mid
+
+        class FakeBot:
+            async def send_message(self, chat_id, text, **kw):
+                mid = next(counter)
+                calls.append(("send", chat_id, mid, text, kw.get("reply_markup")))
+                return FakeMsg(mid)
+
+            async def edit_message_text(self, text, chat_id, message_id, **kw):
+                calls.append(("edit", chat_id, message_id, text, kw.get("reply_markup")))
+
+            async def delete_message(self, chat_id, message_id):
+                calls.append(("delete", chat_id, message_id))
+
+        self.panel = StaffPanel(FakeBot(), self.settings, self.db)
+        self.orders = OrderService(
+            db=self.db,
+            settings=self.settings,
+            receipt_checker=MockReceiptChecker(),
+            on_change=self.panel.sync,
+        )
+
+    async def asyncTearDown(self) -> None:
+        await self.db.close()
+        self.tmp.cleanup()
+
+    async def test_card_lifecycle(self) -> None:
+        order = await self.orders.create_order(
+            client_tg_id=10, client_username="c", amount_rub=5000,
+            usdt_address="TXxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        )
+        # Новая заявка → карточка в группе с кнопкой «Взять»
+        kind, chat, mid, text, kb = self.calls[-1]
+        self.assertEqual((kind, chat), ("send", -100500))
+        self.assertIn("Никто не взял", text)
+        self.assertIn("нужны реквизиты", text)
+        self.assertIn("Взять и выдать реквизиты", str(kb))
+
+        # Реквизиты выданы → карточка редактируется на месте
+        order = await self.orders.assign_requisites(
+            order, support_tg_id=2, requisites=Requisites(bank="Сбер", detail="+7900")
+        )
+        self.assertEqual(self.calls[-1][:3], ("edit", -100500, mid))
+
+        # Чек пришёл → нужна проверка: старая карточка удаляется, новая внизу
+        order, _ = await self.orders.submit_receipt(
+            order, file_id="f", file_unique_id="u", file_bytes=b"ok",
+            filename="ok.pdf", mime_type="application/pdf",
+        )
+        kinds = [c[0] for c in self.calls[-2:]]
+        self.assertEqual(kinds, ["delete", "send"])
+        self.assertEqual(self.calls[-2][2], mid)
+
+    async def test_take_and_owner_check(self) -> None:
+        from types import SimpleNamespace
+
+        order = await self.orders.create_order(
+            client_tg_id=11, client_username=None, amount_rub=5000, usdt_address="",
+        )
+        support = SimpleNamespace(id=2, username="sup", full_name="Sup")
+        other = SimpleNamespace(id=3, username="other", full_name="Other")
+        admin = SimpleNamespace(id=1, username="adm", full_name="Adm")
+
+        # Первое действие закрепляет заявку
+        self.assertIsNone(await self.panel.ensure_owner(order, support))
+        self.assertIn("Ведёт: @sup", self.calls[-1][3])
+        # Другой сотрудник не может, админ — может
+        self.assertIn("@sup", await self.panel.ensure_owner(order, other) or "")
+        self.assertIsNone(await self.panel.ensure_owner(order, admin))
+        # «Взять» вторым — владелец не меняется
+        owner = await self.db.take_order(order.id, tg_id=3, name="@other")
+        self.assertEqual(owner[0], 2)
+
+
+class StatsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_stats_text(self) -> None:
+        from exchange.stats import build_stats_text
+
+        tmp = tempfile.TemporaryDirectory()
+        db = Database(Path(tmp.name) / "s.db")
+        await db.connect()
+        try:
+            orders = OrderService(
+                db=db, settings=_settings(), receipt_checker=MockReceiptChecker()
+            )
+            o = await orders.create_order(
+                client_tg_id=1, client_username=None, amount_rub=10000,
+                usdt_address="TXxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            )
+            # Завершённая заявка с известной себестоимостью
+            await db.update_fields(
+                o.id, status=OrderStatus.COMPLETED,
+                extra={"effective_cost": 95.0, "margin_percent": 6.3},
+            )
+            await db.take_order(o.id, tg_id=2, name="@sup")
+            o2 = await orders.create_order(
+                client_tg_id=5, client_username=None, amount_rub=3000, usdt_address="",
+            )
+            await orders.cancel(o2, reason="тест")
+
+            text = await build_stats_text(db)
+            self.assertIn("Сегодня", text)
+            self.assertIn("Заявок: <b>2</b> · завершено 1", text)
+            self.assertIn("10 000 ₽", text)
+            self.assertIn("@sup — 1", text)
+            self.assertIn("Прибыль", text)
+        finally:
+            await db.close()
+            tmp.cleanup()
+
+
+class ScreenMiddlewareTests(unittest.IsolatedAsyncioTestCase):
+    async def test_request_middleware_deletes_previous(self) -> None:
+        from datetime import datetime, timezone
+
+        from aiogram.methods import SendMessage
+        from aiogram.types import Chat, Message
+
+        from exchange.screen import (
+            ScreenRequestMiddleware,
+            ScreenTracker,
+            Step,
+            _current_step,
+        )
+
+        deleted: list[int] = []
+
+        class FakeBot:
+            async def delete_message(self, *, chat_id, message_id):
+                deleted.append(message_id)
+
+        counter = iter(range(100, 200))
+
+        async def make_request(bot, method):
+            return Message(
+                message_id=next(counter),
+                date=datetime.now(timezone.utc),
+                chat=Chat(id=method.chat_id, type="private"),
+                text=method.text,
+            )
+
+        mw = ScreenRequestMiddleware(ScreenTracker())
+        bot = FakeBot()
+
+        token = _current_step.set(Step(chat_id=10))
+        await mw(make_request, bot, SendMessage(chat_id=10, text="шаг 1"))
+        _current_step.reset(token)
+        self.assertEqual(deleted, [])
+
+        token = _current_step.set(Step(chat_id=10))
+        await mw(make_request, bot, SendMessage(chat_id=10, text="шаг 2"))
+        _current_step.reset(token)
+        self.assertEqual(deleted, [100])
 
 
 if __name__ == "__main__":

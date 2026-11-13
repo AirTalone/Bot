@@ -15,22 +15,22 @@ router = Router(name="fallback")
 
 
 @router.message(StateFilter(default_state), F.text)
-async def any_text_shows_menu(message: Message, settings: Settings) -> None:
+async def any_text_shows_menu(message: Message, settings: Settings, rates) -> None:
     # Не перехватываем уже обработанные кнопки/команды — этот роутер подключается последним.
     user_id = message.from_user.id if message.from_user else None
     await message.answer(
-        welcome_text(settings, user_id),
+        welcome_text(settings, user_id, rates),
         reply_markup=client_main_kb(),
         parse_mode="HTML",
     )
 
 
 @router.message(StateFilter(default_state))
-async def any_other_shows_menu(message: Message, settings: Settings) -> None:
+async def any_other_shows_menu(message: Message, settings: Settings, rates) -> None:
     user_id = message.from_user.id if message.from_user else None
     await message.answer(
         "Откройте меню кнопками внизу или нажмите «Меню».\n\n"
-        + welcome_text(settings, user_id),
+        + welcome_text(settings, user_id, rates),
         reply_markup=client_main_kb(),
         parse_mode="HTML",
     )
