@@ -337,6 +337,31 @@ class CcFormulaTests(unittest.TestCase):
         self.assertIsNone(q.to_extra()["income_percent"])
 
 
+class StaffRateTextTests(unittest.TestCase):
+    def test_staff_rate_text(self) -> None:
+        from exchange.rates.pricing import compute_client_quote
+        from exchange.rates.service import RateService, RateSnapshot, utcnow
+        from exchange.staff_card import staff_rate_text
+
+        s = _settings(rate_mode="auto", rate_formula="cc")
+        r = RateService(s)
+        q = compute_client_quote(
+            amount_rub=0, rapira=86.23, cryptocards=88.48, fallback_rate=90,
+            formula="cc", income_percent=1.25,
+        )
+        r._snapshot = RateSnapshot(
+            rapira=86.23, cryptocards=88.48, bybit_nth=None, base=88.48,
+            client=q.suggested_rate, formula=q.formula, mode="auto",
+            updated_at=utcnow(), effective_cost=q.effective_cost,
+            expected_margin_percent=q.margin_percent,
+        )
+        text = staff_rate_text(r, s)
+        self.assertIn("CC: <b>88.48</b>", text)
+        self.assertIn("Ваш доход: <b>1.25%</b>", text)
+        self.assertIn("Курс клиенту: <b>87.83 ₽</b>", text)
+        self.assertIn("свыше 30к → 87.63", text)
+
+
 class RateSampleTests(unittest.IsolatedAsyncioTestCase):
     async def test_day_average(self) -> None:
         from exchange.rates.samples import RateSampleStore

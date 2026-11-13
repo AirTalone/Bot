@@ -7,6 +7,7 @@ from aiogram.types import Message
 
 from exchange.client_card import fmt_rub
 from exchange.config import Settings
+from exchange.staff_card import staff_rate_text
 from exchange.keyboards import SUPPORT_BUTTON_TEXT, client_main_kb, support_contact_kb
 
 router = Router(name="common")
@@ -90,29 +91,7 @@ async def cmd_rate(message: Message, settings: Settings, rates) -> None:
     staff = user_id is not None and settings.is_support(user_id)
 
     if staff:
-        formula = (settings.rate_formula or "").lower()
-        if formula == "cc":
-            extra = (
-                f"\nФормула: <b>от курса CC, ваш доход {settings.target_income_percent:g}%</b>"
-                f" (макс. {settings.cc_edge_percent:g}%)"
-                f"\nНет курса CC → запасной Rapira + {settings.markup_rub_default:g}"
-                f"\nМин. доход: ≤40к <b>{settings.min_margin_percent:g}%</b>, "
-                f">40к <b>{settings.min_margin_percent_40k:g}%</b>"
-            )
-        elif formula in {"spread", "profit", "margin"}:
-            extra = (
-                f"\nФормула: <b>Rapira + {settings.markup_rub_default:g}</b>"
-                f" · CC edge: <b>{settings.cc_edge_percent:.2f}%</b>"
-                f"\nМин. маржа: ≤40к <b>{settings.min_margin_percent:.2f}%</b>, "
-                f">40к <b>{settings.min_margin_percent_40k:.2f}%</b>"
-            )
-        else:
-            extra = f"\nСпред: <b>{settings.spread_percent:.2f}%</b>"
-        text = (
-            snap.summary_html()
-            + extra
-            + f"\nЛимиты: {settings.min_amount_rub:.0f}–{settings.max_amount_rub:.0f} ₽"
-        )
+        text = staff_rate_text(rates, settings)
     else:
         text = snap.client_summary_html(
             min_amount_rub=settings.min_amount_rub,

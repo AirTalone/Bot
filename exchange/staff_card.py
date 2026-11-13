@@ -99,6 +99,60 @@ def _receipt_line(order: Order) -> str | None:
     return "🧾 Чек: ⚠️ не прошёл" + (f" — {msg}" if msg else "")
 
 
+def staff_rate_text(rates, settings) -> str:
+    """Экран /rate для сотрудников: CC, себестоимость, доход, курс клиенту."""
+    snap = rates.snapshot()
+    updated = snap.updated_at
+    if updated.tzinfo is None:
+        from datetime import timezone
+
+        updated = updated.replace(tzinfo=timezone.utc)
+    updated_s = updated.astimezone(MOSCOW_TZ).strftime("%H:%M")
+
+    lines = [f"📈 <b>Курс сейчас</b> · обновлено {updated_s} МСК", DIVIDER]
+    if snap.cryptocards is not None:
+        cost = f" · себестоимость {snap.effective_cost:.2f}" if snap.effective_cost else ""
+        lines.append(f"🏷 CC: <b>{snap.cryptocards:.2f}</b>{cost}")
+    else:
+        lines.append("🏷 CC: ⚠️ нет курса — курс клиенту по Rapira + "
+                     f"{settings.markup_rub_default:g}")
+
+    if snap.formula.startswith("cc"):
+        lines.append(
+            f"💰 Ваш доход: <b>{settings.target_income_percent:g}%</b> "
+            f"(макс. {settings.cc_edge_percent:g}%)"
+        )
+    elif snap.expected_margin_percent is not None:
+        lines.append(f"💰 Ваш доход: <b>{snap.expected_margin_percent:.2f}%</b>")
+
+    lines.append(f"👤 Курс клиенту: <b>{snap.client:.2f} ₽</b>")
+    tiers = []
+    for tier, discount in (
+        (settings.amount_tier_30k, settings.amount_discount_30k),
+        (settings.amount_tier_40k, settings.amount_discount_40k),
+    ):
+        if discount > 0:
+            rate = rates.quote_for_amount(tier + 1).suggested_rate
+            tiers.append(f"свыше {fmt_rub(tier / 1000)}к → {rate:.2f}")
+    if tiers:
+        lines.append("     " + " · ".join(tiers))
+    if snap.rapira is not None:
+        lines.append(f"📊 Rapira: {snap.rapira:.2f} (для справки)")
+
+    lines.append(DIVIDER)
+    lines.append(
+        f"Лимиты: {fmt_rub(settings.min_amount_rub)}–{fmt_rub(settings.max_amount_rub)} ₽"
+    )
+    lines.append(
+        f"Мин. доход: {settings.min_margin_percent:g}% "
+        f"(до {fmt_rub(settings.amount_tier_40k / 1000)}к) · "
+        f"{settings.min_margin_percent_40k:g}% (свыше)"
+    )
+    if snap.errors:
+        lines.append("⚠️ " + escape("; ".join(snap.errors)))
+    return "\n".join(lines)
+
+
 def staff_card(
     order: Order, *, owner: tuple[int, str] | None = None, show_owner: bool = False
 ) -> str:
