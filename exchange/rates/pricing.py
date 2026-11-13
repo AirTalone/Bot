@@ -1,4 +1,4 @@
-"""Расчёт клиентского курса по опросу: Rapira+1, скидки по сумме, маржа к CC."""
+"""Расчёт клиентского курса: от курса CC с вашим доходом N%, скидки по сумме, маржа."""
 
 from __future__ import annotations
 
@@ -36,9 +36,25 @@ def round_usdt_amount(value: float) -> float:
 
 
 def effective_cc_cost(cryptocards: float, cc_edge_percent: float) -> float:
-    """Себестоимость 1 USDT: курс CC минус макс. чистый доход с площадки."""
+    """
+    Во сколько рублей вам обходится 1 USDT, который вы отдаёте клиенту.
+    За выплату на CC вы получаете USDT по курсу CC + доход cc_edge% сверху
+    (13 000 ₽ → 147.07 + 2% = 150.01 USDT), значит 1 USDT стоит CC / 1.02.
+    """
     edge = max(0.0, float(cc_edge_percent)) / 100.0
-    return float(cryptocards) * (1.0 - edge)
+    return float(cryptocards) / (1.0 + edge)
+
+
+def cc_client_rate(
+    cryptocards: float, *, income_percent: float, cc_edge_percent: float
+) -> float:
+    """
+    Курс клиенту от курса CC, чтобы ваш доход с заявки был income_percent.
+    Доход = cc_edge (2%) → курс = CC; доход 0% → курс = себестоимость.
+    """
+    return effective_cc_cost(cryptocards, cc_edge_percent) * (
+        1.0 + float(income_percent) / 100.0
+    )
 
 
 def margin_percent(client_rate: float, cost: float) -> float:
@@ -90,9 +106,11 @@ class RateQuote:
     min_margin_percent: float
     margin_ok: bool | None
     formula: str
+    income_percent: float | None = None
 
     def to_extra(self) -> dict:
         return {
+            "income_percent": self.income_percent,
             "rapira": self.rapira,
             "cryptocards": self.cryptocards,
             "markup_rub": self.markup_rub,
@@ -104,42 +122,6 @@ class RateQuote:
             "margin_ok": self.margin_ok,
             "quote_formula": self.formula,
         }
-
-    def support_block_html(self, *, final_rate: float | None = None) -> str:
-        rapira = f"{self.rapira:.2f}" if self.rapira is not None else "—"
-        cc = f"{self.cryptocards:.2f}" if self.cryptocards is not None else "—"
-        cost = (
-            f"{self.effective_cost:.2f}" if self.effective_cost is not None else "—"
-        )
-        rate = final_rate if final_rate is not None else self.suggested_rate
-        margin = self.margin_percent
-        if (
-            final_rate is not None
-            and self.effective_cost is not None
-            and self.effective_cost > 0
-        ):
-            margin = margin_percent(final_rate, self.effective_cost)
-        margin_s = f"{margin:.2f}%" if margin is not None else "—"
-        if self.margin_ok is True:
-            verdict = "✅ маржа ок"
-        elif self.margin_ok is False:
-            verdict = "⚠️ ниже минимума — решение саппорта"
-        else:
-            verdict = "❓ нет CC — проверь вручную"
-        lines = [
-            f"Rapira: <b>{rapira}</b>",
-            f"CryptoCards (закуп): <b>{cc}</b>",
-            f"Себестоимость (CC − edge): <b>{cost}</b>",
-            f"Предложенный курс: <b>{self.suggested_rate:.2f}</b> ({self.formula})",
-            f"Итоговый курс: <b>{rate:.2f}</b>",
-            f"Маржа: <b>{margin_s}</b> (мин. {self.min_margin_percent:.2f}%) — {verdict}",
-        ]
-        if self.amount_discount_rub > 0:
-            lines.insert(
-                3,
-                f"Скидка по сумме: <b>−{self.amount_discount_rub:g}</b> ₽ к курсу",
-            )
-        return "\n".join(lines)
 
 
 def compute_client_quote(
@@ -156,11 +138,14 @@ def compute_client_quote(
     discount_40k: float = 0.3,
     min_margin_percent: float = 1.0,
     min_margin_percent_40k: float = 0.5,
+    formula: str = "spread",
+    income_percent: float = 1.25,
 ) -> RateQuote:
     """
-    Клиенту база всегда Rapira.
-    Черновик курса: Rapira + markup (− скидка по сумме >30к / >40к).
-    CC — только закуп и проверка маржи (макс. чистый доход с CC = cc_edge).
+    formula="cc" (основная): курс клиенту считается от курса CC так, чтобы
+      ваш доход был income_percent (из максимальных cc_edge = 2%),
+      минус скидка по сумме. Нет курса CC → запасной Rapira + markup.
+    formula="spread" (старая): Rapira + markup − скидка; CC только для маржи.
     """
     discount = amount_discount_rub(
         amount_rub,
@@ -179,18 +164,28 @@ def compute_client_quote(
     rp = rapira if rapira is not None and rapira > 0 else None
     cc = cryptocards if cryptocards is not None and cryptocards > 0 else None
 
-    if rp is not None:
-        suggested = rp + float(markup_rub) - discount
-        formula = f"rapira+{markup_rub:g}"
+    mode = (formula or "spread").lower()
+    if mode == "cc" and cc is not None:
+        suggested = (
+            cc_client_rate(cc, income_percent=income_percent, cc_edge_percent=cc_edge_percent)
+            - discount
+        )
+        used = f"cc+{income_percent:g}%"
         if discount > 0:
-            formula += f"-{discount:g}"
+            used += f"-{discount:g}"
+    elif rp is not None:
+        # Основная формула для spread, запасная для cc (если нет курса CC)
+        suggested = rp + float(markup_rub) - discount
+        used = f"rapira+{markup_rub:g}"
+        if discount > 0:
+            used += f"-{discount:g}"
     else:
         suggested = float(fallback_rate)
-        formula = "fallback"
+        used = "fallback"
 
     if suggested <= 0:
         suggested = float(fallback_rate)
-        formula = "fallback"
+        used = "fallback"
 
     # Курс клиенту — до сотых: показанный курс = курс, по которому считаются USDT
     suggested = round(suggested, 2)
@@ -214,7 +209,8 @@ def compute_client_quote(
         margin_percent=round(margin, 4) if margin is not None else None,
         min_margin_percent=min_m,
         margin_ok=margin_ok,
-        formula=formula,
+        formula=used,
+        income_percent=float(income_percent) if used.startswith("cc") else None,
     )
 
 

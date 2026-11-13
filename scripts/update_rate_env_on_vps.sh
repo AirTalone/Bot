@@ -27,9 +27,19 @@ upsert() {
   fi
 }
 
+# Записать ключ, только если его ещё нет (не затирать ваши настройки)
+add_if_missing() {
+  local key="$1" value="$2"
+  if ! grep -q "^${key}=" .env; then
+    printf '%s=%s\n' "$key" "$value" >> .env
+  fi
+}
+
 echo "==> обновляю ключи формулы в .env"
 upsert RATE_MODE auto
-upsert RATE_FORMULA spread
+upsert RATE_FORMULA cc
+add_if_missing TARGET_INCOME_PERCENT 1.25
+add_if_missing SUPPORT_CONTACT Georgina771
 upsert RATE_REFRESH_SEC 60
 upsert MARKUP_RUB_DEFAULT 1
 upsert CC_EDGE_PERCENT 2

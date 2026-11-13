@@ -77,6 +77,8 @@ async def main() -> int:
             discount_40k=settings.amount_discount_40k,
             min_margin_percent=settings.min_margin_percent,
             min_margin_percent_40k=settings.min_margin_percent_40k,
+            formula="cc" if settings.rate_formula == "cc" else "spread",
+            income_percent=settings.target_income_percent,
         )
         print(
             f"{label}: курс={q.suggested_rate:.4f} · "

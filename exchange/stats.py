@@ -118,6 +118,6 @@ async def build_stats_text(db: Database, now: datetime | None = None) -> str:
         blocks.append(format_period(compute_period(title, subset, owners)))
     blocks.append(
         "<i>Оборот и прибыль — по завершённым заявкам. Прибыль ≈ рубли клиента "
-        "минус закуп USDT по себестоимости (CC − edge).</i>"
+        "минус выданные USDT по себестоимости (курс CC ÷ 1.02).</i>"
     )
     return "\n\n".join(blocks)

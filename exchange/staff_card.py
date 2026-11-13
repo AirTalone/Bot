@@ -42,13 +42,24 @@ def _num(value: object) -> float | None:
 def _rate_line(order: Order) -> str:
     extra = order.extra or {}
     line = f"📈 Курс: <b>{order.rate:.2f} ₽</b>"
+    formula = str(extra.get("quote_formula") or "")
     rapira = _num(extra.get("rapira"))
+    cc = _num(extra.get("cryptocards"))
+    income = _num(extra.get("income_percent"))
+    discount = _num(extra.get("amount_discount_rub")) or 0
     if extra.get("rate_set_by"):
         line += " · изменён вручную"
+    elif formula.startswith("cc") and cc is not None:
+        line += f" · от CC {cc:.2f}"
+        if income is not None:
+            line += f", доход {income:g}%"
+        if discount:
+            line += f", скидка −{discount:g}"
     elif rapira is not None:
         markup = _num(extra.get("markup_rub")) or 0
-        discount = _num(extra.get("amount_discount_rub")) or 0
-        line += f" · Rapira {rapira:.2f}"
+        # Новая заявка без курса CC — курс взят по запасной формуле
+        prefix = "запасной: " if "income_percent" in extra else ""
+        line += f" · {prefix}Rapira {rapira:.2f}"
         if markup:
             line += f" + {markup:g}"
         if discount:
@@ -62,17 +73,17 @@ def _margin_lines(order: Order) -> list[str]:
     cc = _num(extra.get("cryptocards"))
     cost = _num(extra.get("effective_cost"))
     if cc is not None and cost is not None:
-        lines.append(f"🏷 Закуп: CC {cc:.2f} → себест. {cost:.2f}")
+        lines.append(f"🏷 CC {cc:.2f} · себестоимость {cost:.2f}")
     margin = _num(extra.get("margin_percent"))
     min_m = _num(extra.get("min_margin_percent"))
     min_s = f"{min_m:g}%" if min_m is not None else "—"
     ok = extra.get("margin_ok")
     if ok is True and margin is not None:
-        lines.append(f"📊 Маржа: ✅ {margin:.2f}% (мин. {min_s})")
+        lines.append(f"💰 Доход: ✅ {margin:.2f}% (мин. {min_s})")
     elif ok is False and margin is not None:
-        lines.append(f"📊 Маржа: ⚠️ <b>{margin:.2f}%</b> — ниже мин. {min_s}")
+        lines.append(f"💰 Доход: ⚠️ <b>{margin:.2f}%</b> — ниже мин. {min_s}")
     else:
-        lines.append("📊 Маржа: ❓ нет CC — проверьте вручную")
+        lines.append("💰 Доход: ❓ нет курса CC — проверьте курс вручную")
     return lines
 
 

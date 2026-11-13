@@ -35,6 +35,7 @@ def _settings(**overrides) -> Settings:
         receipt_fail_open_to_support=True,
         rate_mode="static",
         rate_formula="spread",
+        target_income_percent=1.25,
         rate_refresh_sec=60,
         rate_timeout_sec=5.0,
         cryptocards_api_url="https://cryptocards.ws/api/account",
@@ -258,7 +259,7 @@ class ClientQuoteTests(unittest.TestCase):
             fallback_rate=90.0,
         )
         self.assertAlmostEqual(q.suggested_rate, 80.8)
-        self.assertAlmostEqual(q.effective_cost or 0.0, 81.50 * 0.98)
+        self.assertAlmostEqual(q.effective_cost or 0.0, 81.50 / 1.02, places=3)
         self.assertTrue(q.margin_ok)
 
     def test_amount_discounts(self) -> None:
@@ -295,6 +296,45 @@ class ClientQuoteTests(unittest.TestCase):
         self.assertAlmostEqual(q.suggested_rate, 79.0)
         self.assertFalse(q.margin_ok)
         self.assertLess(q.margin_percent or 0.0, 0.0)
+
+
+class CcFormulaTests(unittest.TestCase):
+    """Курс клиенту от курса CryptoCards с вашим доходом N%."""
+
+    def _q(self, **kw):
+        from exchange.rates.pricing import compute_client_quote
+
+        base = dict(
+            amount_rub=13_000, rapira=86.23, cryptocards=88.4627,
+            fallback_rate=90.0, formula="cc", income_percent=1.25,
+        )
+        base.update(kw)
+        return compute_client_quote(**base)
+
+    def test_income_125_gives_8781(self) -> None:
+        q = self._q()
+        self.assertAlmostEqual(q.suggested_rate, 87.81)
+        self.assertTrue(q.formula.startswith("cc"))
+        # Доход (маржа к себестоимости) ≈ заданным 1.25%
+        self.assertAlmostEqual(q.margin_percent or 0, 1.25, delta=0.02)
+        self.assertTrue(q.margin_ok)
+        self.assertEqual(q.to_extra()["income_percent"], 1.25)
+
+    def test_income_2_equals_cc_rate(self) -> None:
+        # Как на скриншоте CC: 13 000 ₽ по 88.39 = 147.07 USDT, доход 2% целиком ваш
+        q = self._q(cryptocards=13000 / 147.07, income_percent=2.0)
+        self.assertAlmostEqual(q.suggested_rate, round(13000 / 147.07, 2))
+
+    def test_amount_discount_applies(self) -> None:
+        q = self._q(amount_rub=35_000)
+        self.assertAlmostEqual(q.suggested_rate, 87.61)  # 87.81 − 0.2
+
+    def test_no_cc_falls_back_to_rapira(self) -> None:
+        q = self._q(cryptocards=None)
+        self.assertAlmostEqual(q.suggested_rate, 87.23)  # 86.23 + 1
+        self.assertTrue(q.formula.startswith("rapira"))
+        self.assertIsNone(q.margin_ok)
+        self.assertIsNone(q.to_extra()["income_percent"])
 
 
 class RateSampleTests(unittest.IsolatedAsyncioTestCase):

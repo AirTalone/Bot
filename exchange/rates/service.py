@@ -86,7 +86,10 @@ class RateSnapshot:
             if self.cc_samples_today:
                 lines.append(f"Семплов CC-логики за сутки: {self.cc_samples_today}")
         if self.effective_cost is not None:
-            lines.append(f"Себестоимость (CC − edge): <b>{self.effective_cost:.2f}</b>")
+            lines.append(
+                f"Себестоимость (курс, при котором ваш доход 0%): "
+                f"<b>{self.effective_cost:.2f}</b>"
+            )
         lines.append(f"Курс клиенту (база): <b>{self.client:.2f}</b>")
         if self.expected_margin_percent is not None:
             lines.append(
@@ -173,7 +176,13 @@ class RateService:
             discount_40k=settings.amount_discount_40k,
             min_margin_percent=settings.min_margin_percent,
             min_margin_percent_40k=settings.min_margin_percent_40k,
+            formula=self._quote_formula(),
+            income_percent=settings.target_income_percent,
         )
+
+    def _quote_formula(self) -> str:
+        """cc — курс от CC с вашим доходом; иначе — Rapira+markup."""
+        return "cc" if (self.settings.rate_formula or "").lower() == "cc" else "spread"
 
     async def _fetch_cc_leg(self) -> tuple[float | None, float | None, int, str | None]:
         """
@@ -267,8 +276,8 @@ class RateService:
                 samples_count = prev.cc_samples_today
                 errors.append("CryptoCards: использован предыдущий курс")
 
-        formula_name = (settings.rate_formula or "spread").lower()
-        if formula_name in {"spread", "profit", "margin"}:
+        formula_name = (settings.rate_formula or "cc").lower()
+        if formula_name in {"cc", "spread", "profit", "margin"}:
             # Если свежих котировок нет, но в снимке уже был рабочий client — не прыгаем на 90.
             fallback = (
                 prev.client
@@ -288,8 +297,13 @@ class RateService:
                 discount_40k=settings.amount_discount_40k,
                 min_margin_percent=settings.min_margin_percent,
                 min_margin_percent_40k=settings.min_margin_percent_40k,
+                formula=self._quote_formula(),
+                income_percent=settings.target_income_percent,
             )
-            base = quote.rapira if quote.rapira is not None else quote.suggested_rate
+            if quote.formula.startswith("cc") and quote.cryptocards is not None:
+                base = quote.cryptocards
+            else:
+                base = quote.rapira if quote.rapira is not None else quote.suggested_rate
             client = quote.suggested_rate
             used_formula = quote.formula
             effective_cost = quote.effective_cost

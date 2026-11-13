@@ -46,7 +46,9 @@ class Settings:
     receipt_fail_open_to_support: bool
     # Курсы
     rate_mode: str  # static | auto
-    rate_formula: str  # spread | max | min | avg
+    rate_formula: str  # cc (от курса CC) | spread (Rapira+1) | max | min | avg
+    # Формула cc: ваш доход с заявки, % (из максимальных CC_EDGE_PERCENT = 2%)
+    target_income_percent: float
     rate_refresh_sec: int
     rate_timeout_sec: float
     cryptocards_api_url: str
@@ -121,7 +123,8 @@ def load_settings() -> Settings:
         .lower()
         in {"1", "true", "yes", "on"},
         rate_mode=os.getenv("RATE_MODE", "auto").strip().lower(),
-        rate_formula=os.getenv("RATE_FORMULA", "spread").strip().lower(),
+        rate_formula=os.getenv("RATE_FORMULA", "cc").strip().lower(),
+        target_income_percent=float(os.getenv("TARGET_INCOME_PERCENT", "1.25")),
         rate_refresh_sec=int(os.getenv("RATE_REFRESH_SEC", "60")),
         rate_timeout_sec=float(os.getenv("RATE_TIMEOUT_SEC", "15")),
         cryptocards_api_url=os.getenv(
