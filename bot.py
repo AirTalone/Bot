@@ -1,9 +1,9 @@
 """
-Telegram-бот: пришли ссылку — получи QR-код в стиле СБП.
+Telegram-бот обмена RUB → USDT.
 
 Запуск:
-  1. Создай бота у @BotFather, скопируй токен
-  2. Создай файл .env с BOT_TOKEN=...
+  1. Создай бота у @BotFather
+  2. Скопируй .env.example → .env и заполни BOT_TOKEN, ADMIN_IDS, SUPPORT_IDS
   3. pip install -r requirements.txt
   4. python bot.py
 """
@@ -13,123 +13,158 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import re
 
-from aiogram import Bot, Dispatcher, F
-from aiogram.filters import Command, CommandStart
-from aiogram.types import BufferedInputFile, Message, MessageEntity
+from aiogram import Bot, Dispatcher
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import BotCommand, MenuButtonCommands
 from dotenv import load_dotenv
 
-from qr_generator import generate_sbp_qr, is_plausible_url, normalize_url
+from exchange.client_card import client_card
+from exchange.keyboards import client_order_kb
+from exchange.config import load_settings
+from exchange.context import AppContext, ContextMiddleware
+from exchange.db import Database
+from exchange.handlers import setup_routers
+from exchange.rates import RateService
+from exchange.rates.samples import RateSampleStore
+from exchange.rates.service import default_samples_path
+from exchange.receipt import build_receipt_checker
+from exchange.screen import setup_screen
+from exchange.services import OrderService
+from exchange.staff_panel import StaffPanel
+from exchange.statuses import CLIENT_VISIBLE_ACTIVE
 
-load_dotenv()
+# Какой файл настроек читать. По умолчанию .env (боевой).
+# Для тестов: ENV_FILE=.env.test (так делает start_test.bat).
+ENV_FILE = os.getenv("ENV_FILE", ".env")
+# utf-8-sig: не ломаемся, если Блокнот сохранил файл с невидимым BOM в начале
+load_dotenv(ENV_FILE, encoding="utf-8-sig")
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
-
-URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
-
-HELP_TEXT = (
-    "Пришлите ссылку — я отвечу QR-кодом в стиле СБП.\n\n"
-    "Примеры:\n"
-    "• https://qr.nspk.ru/AD10...\n"
-    "• любая другая https-ссылка\n\n"
-    "QR приходит файлом PNG без сжатия Telegram — так банк его нормально читает.\n\n"
-    "Команды:\n"
-    "/start — приветствие\n"
-    "/help — эта подсказка"
-)
+if not os.path.exists(ENV_FILE):
+    logger.warning("Файл настроек %s не найден — берутся только переменные окружения", ENV_FILE)
+logger.info("Настройки загружены из %s", ENV_FILE)
 
 
-def _entity_text(text: str, entity: MessageEntity) -> str:
-    # Telegram offsets are in UTF-16 code units
-    encoded = text.encode("utf-16-le")
-    start = entity.offset * 2
-    end = (entity.offset + entity.length) * 2
-    return encoded[start:end].decode("utf-16-le")
+async def expire_loop(orders: OrderService, bot: Bot, interval_sec: int = 60) -> None:
+    while True:
+        try:
+            expired = await orders.expire_overdue()
+            for order in expired:
+                try:
+                    await bot.send_message(
+                        order.client_tg_id,
+                        client_card(order),
+                        parse_mode="HTML",
+                        reply_markup=client_order_kb(order),
+                    )
+                except Exception:
+                    logger.exception("expire notify failed for %s", order.public_id)
+        except Exception:
+            logger.exception("expire_loop error")
+        await asyncio.sleep(interval_sec)
 
 
-def extract_url(message: Message) -> str | None:
-    """Достаёт URL из entities (надёжнее, чем regex по тексту)."""
-    text = message.text or message.caption or ""
-    entities = message.entities or message.caption_entities or []
-
-    for entity in entities:
-        if entity.type == "url":
-            return _entity_text(text, entity).rstrip(").,;]")
-        if entity.type == "text_link" and entity.url:
-            return entity.url.strip()
-
-    text = text.strip()
-    if not text:
-        return None
-    match = URL_RE.search(text)
-    if match:
-        return match.group(0).rstrip(").,;]")
-    if is_plausible_url(text):
-        return normalize_url(text)
-    return None
-
-
-async def cmd_start(message: Message) -> None:
-    await message.answer(
-        "Привет! Я делаю QR-коды бесплатно и без регистрации.\n\n" + HELP_TEXT
-    )
-
-
-async def cmd_help(message: Message) -> None:
-    await message.answer(HELP_TEXT)
-
-
-async def handle_text(message: Message) -> None:
-    url = extract_url(message)
-    if not url:
-        await message.answer(
-            "Не вижу ссылку. Пришлите URL, например:\n"
-            "https://qr.nspk.ru/AD101055EDK5J0E099CQ1IGD7IAVBQK0"
-        )
-        return
-
-    logger.info("QR request from chat=%s url=%s", message.chat.id, url)
-
-    try:
-        png = await asyncio.to_thread(generate_sbp_qr, url)
-    except Exception:
-        logger.exception("QR generation failed for %s", url)
-        await message.answer("Не удалось сгенерировать QR. Попробуйте другую ссылку.")
-        return
-
-    # Важно: sendDocument + disable_content_type_detection —
-    # иначе Telegram жмёт картинку как фото и банк не читает QR.
-    document = BufferedInputFile(png, filename="sbp-qr.png")
-    await message.answer_document(
-        document=document,
-        caption=f"QR готов (PNG без сжатия)\n{url}",
-        disable_content_type_detection=True,
-    )
+async def rates_loop(rates: RateService, interval_sec: int) -> None:
+    while True:
+        try:
+            await rates.refresh()
+        except Exception:
+            logger.exception("rates_loop error")
+        await asyncio.sleep(max(15, interval_sec))
 
 
 async def main() -> None:
-    token = os.getenv("BOT_TOKEN", "").strip()
-    if not token:
+    settings = load_settings()
+    if not settings.bot_token:
         raise SystemExit(
             "Не задан BOT_TOKEN.\n"
-            "Создайте бота у @BotFather и пропишите токен в файле .env:\n"
-            "BOT_TOKEN=123456:ABC-DEF..."
+            "Создайте бота у @BotFather и пропишите токен в .env"
         )
+    if not settings.admin_ids:
+        logger.warning("ADMIN_IDS пуст — выплачивать USDT через /admin будет некому")
 
-    bot = Bot(token=token)
-    dp = Dispatcher()
-    dp.message.register(cmd_start, CommandStart())
-    dp.message.register(cmd_help, Command("help"))
-    dp.message.register(handle_text, F.text)
+    db = Database(settings.database_path)
+    await db.connect()
+    samples = RateSampleStore(default_samples_path(settings.database_path))
+    await samples.connect()
+    receipt_checker = build_receipt_checker(settings)
+    rate_service = RateService(settings, samples=samples)
+    await rate_service.refresh()
+    order_service = OrderService(
+        db=db,
+        settings=settings,
+        receipt_checker=receipt_checker,
+        rates=rate_service,
+    )
+    bot = Bot(token=settings.bot_token)
+
+    # Панель сотрудников в рабочей группе: карточка заявки обновляется
+    # после каждого изменения заявки
+    panel = StaffPanel(bot, settings, db)
+    order_service.on_change = panel.sync
+    if panel.enabled:
+        logger.info("Рабочая группа сотрудников: %s", settings.staff_chat_id)
+        # Обновить карточки активных заявок (новый вид после обновления бота)
+        for order in await db.list_by_statuses(CLIENT_VISIBLE_ACTIVE, limit=200):
+            await panel.sync(order)
+    else:
+        logger.info("STAFF_CHAT_ID не задан — уведомления сотрудникам идут в личку")
+
+    ctx = AppContext(
+        settings=settings, db=db, orders=order_service, rates=rate_service,
+        panel=panel,
+    )
+
+    dp = Dispatcher(storage=MemoryStorage())
+    dp.update.middleware(ContextMiddleware(ctx))
+    # Каждое действие пользователя заменяет прошлое сообщение бота
+    setup_screen(bot, dp)
+    setup_routers(dp)
+
+    # Меню команд слева от поля ввода в Telegram (без обязательного набора /start)
+    await bot.set_my_commands(
+        [
+            BotCommand(command="start", description="Открыть меню"),
+            BotCommand(command="menu", description="Открыть меню"),
+            BotCommand(command="exchange", description="Новая заявка"),
+            BotCommand(command="orders", description="Мои заявки"),
+            BotCommand(command="rate", description="Курс"),
+            BotCommand(command="help", description="Помощь"),
+            BotCommand(command="support", description="Панель саппорта"),
+            BotCommand(command="admin", description="Панель администратора"),
+            BotCommand(command="stats", description="Статистика (сотрудники)"),
+            BotCommand(command="trusted", description="Доверенные клиенты (сотрудники)"),
+        ]
+    )
+    await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+
+    expire_task = asyncio.create_task(expire_loop(order_service, bot))
+    rates_task = asyncio.create_task(
+        rates_loop(rate_service, settings.rate_refresh_sec)
+    )
 
     me = await bot.get_me()
-    logger.info("Bot @%s started", me.username)
-    await dp.start_polling(bot)
+    snap = rate_service.snapshot()
+    logger.info(
+        "Exchange bot @%s started; client_rate=%.4f mode=%s receipt=%s db=%s",
+        me.username,
+        snap.client,
+        snap.mode,
+        settings.receipt_provider,
+        settings.database_path,
+    )
+    try:
+        await dp.start_polling(bot)
+    finally:
+        expire_task.cancel()
+        rates_task.cancel()
+        await samples.close()
+        await db.close()
 
 
 if __name__ == "__main__":
