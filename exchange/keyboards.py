@@ -36,7 +36,7 @@ def no_video_kb() -> InlineKeyboardMarkup:
 def client_main_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="Обменять RUB → USDT"), KeyboardButton(text="Меню")],
+            [KeyboardButton(text="Обменять RUB → USDT")],
             [KeyboardButton(text="Мои заявки"), KeyboardButton(text="Курс")],
             [KeyboardButton(text=SUPPORT_BUTTON_TEXT)],
         ],

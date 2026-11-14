@@ -108,7 +108,7 @@ async def staff_deeplink(message: Message) -> None:
 
 @router.message(CommandStart())
 @router.message(Command("menu"))
-@router.message(F.text == "Меню")
+@router.message(F.text == "Меню")  # старая кнопка у тех, у кого не обновилось меню
 async def cmd_start(message: Message, settings: Settings, rates) -> None:
     user_id = message.from_user.id if message.from_user else None
     await message.answer(
